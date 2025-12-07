@@ -46,81 +46,25 @@ classdef GOCEAfororder_1207< ALGORITHM
                    end
                end
                
-               % 随机重启机制（保证消耗 N 次 FE）
+               % 随机重启机制（在 Population 上操作，并保持同步）
                if stagnation_counter >= 5
-                   % 随机重启：保留部分优秀解，生成 N 个新解，然后选择 N 个
+                   % 随机重启：保留部分优秀解，重新生成部分解
                    [~, sorted_idx] = sort(sum(objvs, 2));
                    keep_count = round(popSize * 0.3);  % 保留30%的优秀解
+                   new_count = popSize - keep_count;
                    
-                   % 保留优秀解
-                   keep_idx = sorted_idx(1:keep_count);
-                   PopulationKeep = Population(keep_idx);
-                   objvsKeep = objvs(keep_idx, :);
+                   % 保留优秀解（直接在 Population 上截取）
+                   keep_idx   = sorted_idx(1:keep_count);
+                   Population = Population(keep_idx);
                    
-                   % 生成 N 个新的随机解（消耗 N 次 FE，保证每次迭代固定消耗 N）
-                   auxValsRestart = cell(popSize, 1);
-                   for i = 1:popSize
+                   % 生成新的随机解，并加入 Population
+                   for i = 1:new_count
                        new_sol = generate_random_solution(varDim);
                        new_sol = repair_route(new_sol);
-                       new_obj = Problem.Evaluation(new_sol);  % 消耗 FE
-                       auxValsRestart{i} = new_obj;
+                       new_obj = Problem.Evaluation(new_sol);
+                       Population = [Population, new_obj];
                    end
                    
-                   % 合并：保留的解 + N 个新解
-                   PopulationRestart = [PopulationKeep, auxValsRestart{:}];
-                   auxObjvsRestart = zeros(popSize, objDim);
-                   for i = 1:popSize
-                       auxObjvsRestart(i,:) = auxValsRestart{i}.objs;
-                   end
-                   objvsRestart = [objvsKeep; auxObjvsRestart];
-                   
-                   % 从 keep_count + N 个解中选择 N 个（非支配排序 + 选择）
-                   [rkRestart,~] = NDSort(objvsRestart, inf);
-                   refPointRestart = max(objvsRestart, [], 1);
-                   refPointRestart = 1.2 * refPointRestart;
-                   
-                   selectedRestart = false(size(objvsRestart,1), 1);
-                   selected_count = 0;
-                   
-                   for front = 1:max(rkRestart)
-                       front_mask = (rkRestart == front);
-                       front_size = sum(front_mask);
-                       
-                       if selected_count + front_size <= popSize
-                           selectedRestart(front_mask) = true;
-                           selected_count = selected_count + front_size;
-                       else
-                           need = popSize - selected_count;
-                           FiObjvs = objvsRestart(front_mask, 1:objDim);
-                           FiPop = PopulationRestart(front_mask);
-                           
-                           [frontObjvs, IX] = sortrows(FiObjvs, 1);
-                           fitV = zeros(front_size, 1);
-                           
-                           if front_size == 1
-                               fitV(IX(1)) = 1;
-                           else
-                               fitV(IX(1)) = (frontObjvs(2,1) - frontObjvs(1,1)) * (refPointRestart(1,2) - frontObjvs(1,2));
-                               if front_size > 2
-                                   fitV(IX(2:front_size-1)) = (frontObjvs(3:front_size,1) - frontObjvs(2:front_size-1,1)) .* ...
-                                                               (frontObjvs(1:front_size-2,2) - frontObjvs(2:front_size-1,2));
-                               end
-                               fitV(IX(front_size)) = (refPointRestart(1,1) - frontObjvs(front_size,1)) * ...
-                                                       (frontObjvs(front_size-1,2) - frontObjvs(front_size,2));
-                           end
-                           
-                           [~, sort_idx] = sort(fitV, 'descend');
-                           selected_idx = find(front_mask);
-                           selectedRestart(selected_idx(sort_idx(1:need))) = true;
-                           selected_count = popSize;
-                       end
-                       
-                       if selected_count >= popSize
-                           break;
-                       end
-                   end
-                   
-                   Population = PopulationRestart(selectedRestart);
                    stagnation_counter = 0;
                    diversity_history = [];
                    % 重启后直接进入下一代
