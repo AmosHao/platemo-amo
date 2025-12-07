@@ -1,0 +1,1 @@
+ platemo('algorithm',@NSGAII,'problem',@DTLZ2,'N',200,'-M',3)
