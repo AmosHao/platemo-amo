@@ -39,8 +39,8 @@ classdef planner_order_v3 < PROBLEM
         % 引入数据文件（包含坐标、障碍物、惩罚系数等）
         % 数据文件路径：从当前文件位置到forOrderNew26文件夹
         current_file_dir = fileparts(mfilename('fullpath'));
-        % 从 PlatEMO/Problems/Multi-objective optimization/Amos/ 到 PlatEMO/ 的上级目录
-        platemo_root = fileparts(fileparts(fileparts(fileparts(current_file_dir))));
+        % 从 PlatEMO/Problems/Multi-objective optimization/Amos/ 到 PlatEMO/ 目录
+        platemo_root = fileparts(fileparts(fileparts(current_file_dir)));
         data_file_path = fullfile(platemo_root, 'forOrderNew26', 'order_data.m');
         
         if exist(data_file_path, 'file')
