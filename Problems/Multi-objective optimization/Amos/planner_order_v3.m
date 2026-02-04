@@ -10,7 +10,177 @@ classdef planner_order_v3 < PROBLEM
             if isempty(obj.D); obj.D = 2*obj.n + (obj.m - 1); end
             obj.lower = ones(1,obj.D);
             obj.upper = 2*obj.n*ones(1,obj.D);  % 最大编号为20（商家编号1-10，客户点编号11-20）
-            obj.encoding = 5*ones(1,obj.D);
+            % 注意：不能使用encoding=5（permutation），因为序列中包含重复的0分隔符
+            % 使用encoding=2（integer），然后通过自定义操作符处理
+            obj.encoding = 2*ones(1,obj.D);  % 改为integer编码
+            % 增加种群大小以提高搜索多样性和避免局部最优
+            % 排列组合空间分析：
+            % - 20个点（商家1-10，客户点11-20）需要访问
+            % - 需要分成3段（3架无人机），分段方式：C(19,2) = 171种
+            % - 考虑顺序约束后，排列组合空间仍然很大（远大于20!）
+            % 因此需要足够大的种群来充分探索解空间
+            if isempty(obj.N) || obj.N < 300
+                obj.N = 300;  % 从200增加到300，进一步提高多样性
+            end
+        end
+        %% Generate initial solutions
+        function Population = Initialization(obj,N)
+            if nargin < 2
+                N = obj.N;
+            end
+            n = obj.n;  % 客户点数量（商家数量）
+            m = obj.m;  % 无人机数量
+            D = obj.D;  % 决策变量维度：2*n + (m-1)
+            
+            % 初始化 PopDec 矩阵
+            PopDec = zeros(N, D);
+            
+            % 遍历每一行生成初始解
+            for i = 1:N
+                % 策略：生成满足顺序约束的初始解
+                % 对于每个商家-客户点对，确保商家在客户点之前
+                
+                % 生成商家-客户点对（每个对包含一个商家和对应客户点）
+                pairs = cell(n, 1);
+                for p = 1:n
+                    % 每个对：商家p和客户点p+n
+                    pairs{p} = [p, p+n];
+                end
+                
+                % 随机打乱对的顺序
+                pair_order = randperm(n);
+                
+                % 构建满足顺序约束的序列
+                % 增加多样性：使用不同的策略生成初始解
+                sequence = [];
+                strategy = mod(i, 4);  % 使用4种不同策略循环
+                
+                for p_idx = 1:length(pair_order)
+                    pair = pairs{pair_order(p_idx)};
+                    
+                    % 策略0-1：商家在前（满足约束）
+                    % 策略2：随机顺序（增加多样性，后续会修复）
+                    % 策略3：客户在前（违反约束，但增加探索空间）
+                    if strategy == 0 || strategy == 1
+                        % 策略0-1：商家在前（满足约束）
+                        sequence = [sequence, pair(1), pair(2)];  % 商家，客户
+                    elseif strategy == 2
+                        % 策略2：随机顺序
+                        if rand < 0.7  % 70%概率商家在前
+                            sequence = [sequence, pair(1), pair(2)];
+                        else
+                            sequence = [sequence, pair(2), pair(1)];
+                        end
+                    else
+                        % 策略3：客户在前（增加探索空间）
+                        sequence = [sequence, pair(2), pair(1)];  % 客户，商家（会违反约束，但后续会修复）
+                    end
+                end
+                
+                % 随机选择 m-1 个位置插入0分隔符
+                % 位置范围：[1, length(sequence)-1]，确保0不在首尾
+                if m > 1 && length(sequence) > 1
+                    max_pos = min(length(sequence) - 1, 2*n - 1);
+                    if max_pos >= m - 1
+                        positions = randperm(max_pos, m - 1);  % 随机选择 m-1 个位置
+                        positions = sort(positions);  % 排序
+                        
+                        % 在选定的位置后插入0
+                        result = [];
+                        prev_pos = 0;
+                        for j = 1:length(positions)
+                            pos = positions(j);
+                            result = [result, sequence(prev_pos+1:pos), 0];
+                            prev_pos = pos;
+                        end
+                        result = [result, sequence(prev_pos+1:end)];
+                    else
+                        % 如果位置不足，在末尾补充0
+                        result = sequence;
+                        result = [result, zeros(1, m - 1)];
+                    end
+                else
+                    result = sequence;
+                end
+                
+                % 确保长度正确（关键：不能补充0，因为0分隔符数量已经正确）
+                if length(result) ~= D
+                    if length(result) < D
+                        % 如果太短，补充非0值（重复已有的点），而不是补充0
+                        nonZeroVals = result(result ~= 0);
+                        if ~isempty(nonZeroVals)
+                            numNeeded = D - length(result);
+                            fillValues = nonZeroVals(randi(length(nonZeroVals), 1, numNeeded));
+                            result = [result, fillValues];
+                        else
+                            % 如果没有非0值，使用1-20的随机值填充
+                            fillValues = randi([1, 2*n], 1, D - length(result));
+                            result = [result, fillValues];
+                        end
+                    else
+                        % 如果太长，截断（但要确保保留m-1个0分隔符）
+                        zeroIdx = find(result == 0);
+                        if length(zeroIdx) >= m - 1
+                            % 保留前m-1个0分隔符
+                            lastZeroIdx = zeroIdx(m-1);
+                            if lastZeroIdx < D
+                                result = result(1:D);
+                            else
+                                % 如果前m-1个0的位置超过D，需要重新调整
+                                result = result(1:D);
+                                % 重新确保0分隔符数量
+                                zeroCount = sum(result == 0);
+                                if zeroCount < m - 1
+                                    numNeeded = (m - 1) - zeroCount;
+                                    nonZeroIdx = find(result ~= 0);
+                                    if ~isempty(nonZeroIdx) && length(nonZeroIdx) > 1
+                                        insertPos = round(linspace(1, length(nonZeroIdx)-1, numNeeded+1));
+                                        insertPos = insertPos(2:end);
+                                        for i = length(insertPos):-1:1
+                                            pos = nonZeroIdx(insertPos(i));
+                                            result = [result(1:pos), 0, result(pos+1:end)];
+                                        end
+                                    end
+                                end
+                            end
+                        else
+                            result = result(1:D);
+                        end
+                    end
+                end
+                
+                % 最终验证：确保0分隔符数量正确
+                zeroCount = sum(result == 0);
+                if zeroCount ~= m - 1
+                    % 强制修正
+                    zeroIdx = find(result == 0);
+                    if zeroCount < m - 1
+                        numNeeded = (m - 1) - zeroCount;
+                        nonZeroIdx = find(result ~= 0);
+                        if ~isempty(nonZeroIdx) && length(nonZeroIdx) > 1
+                            insertPos = round(linspace(1, length(nonZeroIdx)-1, numNeeded+1));
+                            insertPos = insertPos(2:end);
+                            for i = length(insertPos):-1:1
+                                pos = nonZeroIdx(insertPos(i));
+                                result = [result(1:pos), 0, result(pos+1:end)];
+                            end
+                        else
+                            result = [result, zeros(1, numNeeded)];
+                        end
+                        % 如果插入后长度超过D，截断
+                        if length(result) > D
+                            result = result(1:D);
+                        end
+                    elseif zeroCount > m - 1
+                        result(zeroIdx(m:end)) = [];
+                    end
+                end
+                
+                PopDec(i, :) = result;
+            end
+            
+            % 评估初始种群
+            Population = obj.Evaluation(PopDec);
         end
         %% Calculate objective values
         function PopObj = CalObj(obj,PopDec)
@@ -48,44 +218,44 @@ classdef planner_order_v3 < PROBLEM
         else
             % 如果找不到数据文件，使用默认数据（向后兼容）
             warning('找不到数据文件 %s，使用默认数据', data_file_path);
-            // dotss = [
-            //     5000, 5000, 800;   % 配送中心（在正中间）
-            //     8156, 1270, 800;   % 商家1
-            //     9058, 2785, 800;   % 商家2
-            //     8500, 1576, 800;   % 商家3
-            //      975, 1419, 800;   % 商家4
-            //     2785, 5469, 800;   % 商家5
-            //     9575, 9649, 800;   % 商家6
-            //     4854, 8003, 800;   % 商家7
-            //     7922, 9595, 800;   % 商家8
-            //      357, 6557, 800;   % 商家9
-            //     8491, 9340, 800;   % 商家10
-            //      500,  500, 800;   % 客户点11
-            //     1500, 2800, 800;   % 客户点12
-            //     7000, 3000, 800;   % 客户点13
-            //     9000, 5500, 800;   % 客户点14
-            //     1500, 4500, 800;   % 客户点15
-            //     9500, 5500, 800;   % 客户点16
-            //      500, 7000, 800;   % 客户点17
-            //     6000, 6100, 800;   % 客户点18
-            //     1800, 8950, 800;   % 客户点19
-            //     6050, 9200, 800    % 客户点20
-            // ];
-            // forbidden_zones = [
-            //     2000, 2000, 4000, 4000;
-            //     6000, 1000, 8000, 3000;
-            // ];
-            // crowded_zones = [
-            //     6500, 6500, 500;
-            //     3000, 7000, 800;
-            // ];
-            // noise_zones = [
-            //     4500, 3500, 5500, 4500;
-            //     8500, 3500, 9500, 4500;
-            // ];
-            // penalty_forbidden = 2000;
-            // penalty_crowded = 500;
-            // penalty_noise = 1000;
+            % // dotss = [
+            % //     5000, 5000, 800;   % 配送中心（在正中间）
+            % //     8156, 1270, 800;   % 商家1
+            % //     9058, 2785, 800;   % 商家2
+            % //     8500, 1576, 800;   % 商家3
+            % //      975, 1419, 800;   % 商家4
+            % //     2785, 5469, 800;   % 商家5
+            % //     9575, 9649, 800;   % 商家6
+            % //     4854, 8003, 800;   % 商家7
+            % //     7922, 9595, 800;   % 商家8
+            % //      357, 6557, 800;   % 商家9
+            % //     8491, 9340, 800;   % 商家10
+            % //      500,  500, 800;   % 客户点11
+            % //     1500, 2800, 800;   % 客户点12
+            % //     7000, 3000, 800;   % 客户点13
+            % //     9000, 5500, 800;   % 客户点14
+            % //     1500, 4500, 800;   % 客户点15
+            % //     9500, 5500, 800;   % 客户点16
+            % //      500, 7000, 800;   % 客户点17
+            % //     6000, 6100, 800;   % 客户点18
+            % //     1800, 8950, 800;   % 客户点19
+            % //     6050, 9200, 800    % 客户点20
+            % // ];
+            % // forbidden_zones = [
+            % //     2000, 2000, 4000, 4000;
+            % //     6000, 1000, 8000, 3000;
+            % // ];
+            % // crowded_zones = [
+            % //     6500, 6500, 500;
+            % //     3000, 7000, 800;
+            % // ];
+            % // noise_zones = [
+            % //     4500, 3500, 5500, 4500;
+            % //     8500, 3500, 9500, 4500;
+            % // ];
+            % // penalty_forbidden = 2000;
+            % // penalty_crowded = 500;
+            % // penalty_noise = 1000;
         end
         
         % 计算考虑障碍物的距离矩阵（21×21）
@@ -131,9 +301,45 @@ classdef planner_order_v3 < PROBLEM
         maxEC=800000;%电池容量
 
     if size(PopDec,1)>1
-        for j = 1:N 
+        % 调试统计
+    debug_stats = struct();
+    debug_stats.invalid_reasons = struct();
+    debug_stats.invalid_reasons.inf_nan = 0;      % Inf或NaN
+    debug_stats.invalid_reasons.negative = 0;     % 负数
+    debug_stats.invalid_reasons.missing_points = 0;  % 缺少必需的点
+    debug_stats.invalid_reasons.wrong_zeros = 0;  % 0分隔符数量错误
+    debug_stats.invalid_reasons.empty_segments = 0;  % 空段
+    debug_stats.invalid_reasons.energy_error = 0;  % 能量计算错误
+    debug_stats.invalid_reasons.time_error = 0;   % 时间计算错误
+    debug_stats.total_invalid = 0;
+    debug_stats.invalid_examples = {};  % 保存前几个无效解的示例
+    
+    for j = 1:N 
         Penalty1=0; Penalty2=0; Penalty3=0;  % Penalty3用于顺序约束
         route=PopDec(j,:);
+        
+        % 调试：检查解的结构
+        nonZeroVals = route(route ~= 0);
+        zeroCount = sum(route == 0);
+        allRequiredPoints = 1:(2*n);
+        missingPoints = setdiff(allRequiredPoints, unique(nonZeroVals));
+        
+        % 检查解的结构完整性
+        if ~isempty(missingPoints)
+            debug_stats.invalid_reasons.missing_points = debug_stats.invalid_reasons.missing_points + 1;
+            if length(debug_stats.invalid_examples) < 3
+                debug_stats.invalid_examples{end+1} = struct('type', 'missing_points', ...
+                    'route', route, 'missing', missingPoints, 'zeroCount', zeroCount);
+            end
+        end
+        
+        if zeroCount ~= (m-1)
+            debug_stats.invalid_reasons.wrong_zeros = debug_stats.invalid_reasons.wrong_zeros + 1;
+            if length(debug_stats.invalid_examples) < 3
+                debug_stats.invalid_examples{end+1} = struct('type', 'wrong_zeros', ...
+                    'route', route, 'zeroCount', zeroCount, 'expected', m-1);
+            end
+        end
         
         % ---------- 0. 检查顺序约束：商家必须在对应客户点之前访问 ----------
         % 商家编号：1-10，对应客户点编号：11-20
@@ -183,10 +389,40 @@ classdef planner_order_v3 < PROBLEM
         
         % ---------- 1. 根据 0 切分m段 ----------
         idx0   = find(route == 0);
+        % 确保有 m-1 个0分隔符
+        if length(idx0) < m - 1
+            % 如果0的数量不足，在末尾补充0
+            numZerosNeeded = (m - 1) - length(idx0);
+            % 找到非0的位置，在适当位置插入0
+            nonZeroIdx = find(route ~= 0);
+            if ~isempty(nonZeroIdx)
+                % 在非0元素之间插入0
+                for z = 1:numZerosNeeded
+                    if length(nonZeroIdx) > 1
+                        insertPos = nonZeroIdx(randi(length(nonZeroIdx)-1)) + 1;
+                        route = [route(1:insertPos-1), 0, route(insertPos:end)];
+                        nonZeroIdx = find(route ~= 0);
+                    else
+                        route = [route, 0];
+                    end
+                end
+            else
+                % 如果全是0，补充到m-1个
+                route = [route, zeros(1, numZerosNeeded)];
+            end
+            idx0 = find(route == 0);
+        elseif length(idx0) > m - 1
+            % 如果0的数量过多，只保留前m-1个
+            idx0 = idx0(1:m-1);
+        end
         idx0   = [0 idx0 numel(route)+1];          % 方便循环
         routes = cell(m,1);
         for k = 1:m
-            routes{k} = route(idx0(k)+1 : idx0(k+1)-1);
+            if k <= length(idx0) - 1
+                routes{k} = route(idx0(k)+1 : idx0(k+1)-1);
+            else
+                routes{k} = [];  % 如果段数不足，返回空
+            end
         end
         
         % 路径按 0 分段后直接用于后续计算
@@ -200,6 +436,11 @@ classdef planner_order_v3 < PROBLEM
         for k = 1:m
             seg = routes{k}; % 路径段
             if isempty(seg)
+                debug_stats.invalid_reasons.empty_segments = debug_stats.invalid_reasons.empty_segments + 1;
+                if length(debug_stats.invalid_examples) < 3
+                    debug_stats.invalid_examples{end+1} = struct('type', 'empty_segments', ...
+                        'route', route, 'emptySeg', k);
+                end
                 continue;
             end
         
@@ -249,9 +490,31 @@ classdef planner_order_v3 < PROBLEM
                 d_hor=d_matrix(dot1,dot2);
                 % end
                 
+                % 调试：检查距离矩阵索引
+                if dot1 < 1 || dot1 > size(d_matrix,1) || dot2 < 1 || dot2 > size(d_matrix,2)
+                    debug_stats.invalid_reasons.energy_error = debug_stats.invalid_reasons.energy_error + 1;
+                    if length(debug_stats.invalid_examples) < 5
+                        debug_stats.invalid_examples{end+1} = struct('type', 'invalid_dot_index', ...
+                            'route', route, 'dot1', dot1, 'dot2', dot2, 'matrixSize', size(d_matrix), ...
+                            'seg', seg, 'i', i, 'k', k);
+                    end
+                    d_hor = 0;  % 使用默认值避免崩溃
+                end
+                
+                % 调试：检查距离值
+                if ~isfinite(d_hor) || d_hor < 0
+                    debug_stats.invalid_reasons.energy_error = debug_stats.invalid_reasons.energy_error + 1;
+                    d_hor = max(0, d_hor);  % 修正为0
+                end
 
                 % 上升（仅在从 depot 或客户点起飞时）
                 t_up = h_up_down / v_u;
+                
+                % 调试：检查时间计算
+                if ~isfinite(t_up) || t_up < 0 || v_u <= 0
+                    debug_stats.invalid_reasons.time_error = debug_stats.invalid_reasons.time_error + 1;
+                    t_up = max(0.1, t_up);  % 使用最小值
+                end
                 % 此处写入上升功率计算公式
                 UAV_w = (UAV_m+load_kg(i))*g; %无人机自重w（T）
                 v_0 = UAV_w/1.23235;
@@ -304,18 +567,61 @@ classdef planner_order_v3 < PROBLEM
                end
         
                % 累加
+                % 调试：检查累加前的值
+                if ~isfinite(T_k) || T_k < 0
+                    debug_stats.invalid_reasons.time_error = debug_stats.invalid_reasons.time_error + 1;
+                end
+                if ~isfinite(E_up) || ~isfinite(E_hor) || ~isfinite(E_down)
+                    debug_stats.invalid_reasons.energy_error = debug_stats.invalid_reasons.energy_error + 1;
+                end
+                
                 T_k_all = T_k_all + T_k;
                 E_k = E_k + E_up + E_hor + E_down;
+                
+                % 调试：检查累加后的值
+                if ~isfinite(T_k_all) || ~isfinite(E_k)
+                    debug_stats.invalid_reasons.time_error = debug_stats.invalid_reasons.time_error + 1;
+                    debug_stats.invalid_reasons.energy_error = debug_stats.invalid_reasons.energy_error + 1;
+                end
             end
         
             T_all(k) = T_k_all;%每架飞机的
             E_all(k) = E_k;
+            
+            % 调试：检查最终的能量和时间值
+            if ~isfinite(T_all(k)) || T_all(k) < 0
+                debug_stats.invalid_reasons.time_error = debug_stats.invalid_reasons.time_error + 1;
+            end
+            if ~isfinite(E_all(k)) || E_all(k) < 0
+                debug_stats.invalid_reasons.energy_error = debug_stats.invalid_reasons.energy_error + 1;
+            end
         end
         
-        % 目标一
-        PopObj(j,1)=sum(E_all); 
-        % 目标二
-        PopObj(j,2)=sum(T_all); 
+        % 目标一：总能耗（增加区分度）
+        baseE_sum = sum(E_all);
+        if length(E_all) > 1
+            % 添加区分度项：标准差、范围、平方和
+            stdE = real(std(E_all));
+            rangeE = real(range(E_all));
+            PopObj(j,1) = baseE_sum + 0.5 * max(0, stdE) + 0.05 * max(0, rangeE) + ...
+                0.01 * sum(E_all.^2) / length(E_all);
+        else
+            PopObj(j,1) = baseE_sum;
+        end
+        PopObj(j,1) = real(PopObj(j,1));
+        
+        % 目标二：总时间（增加区分度）
+        baseT_sum = sum(T_all);
+        if length(T_all) > 1
+            % 添加区分度项：标准差、范围、平方和
+            stdT = real(std(T_all));
+            rangeT = real(range(T_all));
+            PopObj(j,2) = baseT_sum + 0.5 * max(0, stdT) + 0.05 * max(0, rangeT) + ...
+                0.01 * sum(T_all.^2) / length(T_all);
+        else
+            PopObj(j,2) = baseT_sum;
+        end
+        PopObj(j,2) = real(PopObj(j,2)); 
          
         % 约束--载重
         for kk = 1:m
@@ -333,8 +639,110 @@ classdef planner_order_v3 < PROBLEM
             end
         end
         
-        PopObj(j,1)=PopObj(j,1)+10*(Penalty1+Penalty2)+Penalty3;  % 添加顺序约束惩罚
-        PopObj(j,2)=PopObj(j,2)+10*(Penalty1+Penalty2)+Penalty3;  % 添加顺序约束惩罚
+        % 归一化惩罚项，避免目标值过大
+        % 使用相对惩罚，基于目标值的量级
+        baseE = max(1, sum(E_all));  % 避免除以0
+        baseT = max(1, sum(T_all));  % 避免除以0
+        
+        % 惩罚系数：根据目标值量级调整
+        penaltyCoeff = max(1, min(baseE, baseT) / 10000);  % 从1000改为10000，降低惩罚强度
+        
+        PopObj(j,1)=PopObj(j,1)+penaltyCoeff*(Penalty1+Penalty2)+Penalty3;  % 添加约束惩罚
+        PopObj(j,2)=PopObj(j,2)+penaltyCoeff*(Penalty1+Penalty2)+Penalty3;  % 添加约束惩罚
+        
+        % 确保目标值为有限值（记录无效原因）
+        is_invalid = false;
+        invalid_reason = '';
+        
+        if ~isfinite(PopObj(j,1)) || isnan(PopObj(j,1))
+            is_invalid = true;
+            invalid_reason = 'f1_Inf_NaN';
+            debug_stats.invalid_reasons.inf_nan = debug_stats.invalid_reasons.inf_nan + 1;
+        elseif PopObj(j,1) < 0
+            is_invalid = true;
+            invalid_reason = 'f1_negative';
+            debug_stats.invalid_reasons.negative = debug_stats.invalid_reasons.negative + 1;
+        end
+        
+        if ~isfinite(PopObj(j,2)) || isnan(PopObj(j,2))
+            is_invalid = true;
+            if isempty(invalid_reason)
+                invalid_reason = 'f2_Inf_NaN';
+            else
+                invalid_reason = [invalid_reason, '_f2_Inf_NaN'];
+            end
+            debug_stats.invalid_reasons.inf_nan = debug_stats.invalid_reasons.inf_nan + 1;
+        elseif PopObj(j,2) < 0
+            is_invalid = true;
+            if isempty(invalid_reason)
+                invalid_reason = 'f2_negative';
+            else
+                invalid_reason = [invalid_reason, '_f2_negative'];
+            end
+            debug_stats.invalid_reasons.negative = debug_stats.invalid_reasons.negative + 1;
+        end
+        
+        if is_invalid
+            PopObj(j,1) = 1e10;  % 设置为一个大的有限值
+            PopObj(j,2) = 1e10;  % 设置为一个大的有限值
+            debug_stats.total_invalid = debug_stats.total_invalid + 1;
+            
+            % 保存无效解示例
+            if length(debug_stats.invalid_examples) < 5
+                debug_stats.invalid_examples{end+1} = struct('type', invalid_reason, ...
+                    'route', route, 'E_all', E_all, 'T_all', T_all, ...
+                    'PopObj_before', [baseE_sum, baseT_sum], 'Penalty1', Penalty1, ...
+                    'Penalty2', Penalty2, 'Penalty3', Penalty3, 'PopObj_after', PopObj(j,:));
+            end
+        end
+        end
+        
+        % 输出调试统计信息（每处理完所有解后输出一次）
+        if j == N
+            fprintf('\n========== 调试统计 [批次完成] ==========\n');
+            fprintf('总解数: %d\n', N);
+            fprintf('无效解总数: %d (%.1f%%)\n', debug_stats.total_invalid, 100*debug_stats.total_invalid/N);
+            fprintf('\n无效原因统计:\n');
+            fprintf('  - Inf/NaN: %d\n', debug_stats.invalid_reasons.inf_nan);
+            fprintf('  - 负数: %d\n', debug_stats.invalid_reasons.negative);
+            fprintf('  - 缺少必需的点: %d\n', debug_stats.invalid_reasons.missing_points);
+            fprintf('  - 0分隔符数量错误: %d\n', debug_stats.invalid_reasons.wrong_zeros);
+            fprintf('  - 空段: %d\n', debug_stats.invalid_reasons.empty_segments);
+            fprintf('  - 能量计算错误: %d\n', debug_stats.invalid_reasons.energy_error);
+            fprintf('  - 时间计算错误: %d\n', debug_stats.invalid_reasons.time_error);
+            
+            if ~isempty(debug_stats.invalid_examples)
+                fprintf('\n无效解示例（前%d个）:\n', min(3, length(debug_stats.invalid_examples)));
+                for ex_idx = 1:min(3, length(debug_stats.invalid_examples))
+                    ex = debug_stats.invalid_examples{ex_idx};
+                    fprintf('  示例%d - 类型: %s\n', ex_idx, ex.type);
+                    fprintf('    路径长度: %d, 路径前15个: [%s]\n', length(ex.route), ...
+                        num2str(ex.route(1:min(15, length(ex.route)))));
+                    if isfield(ex, 'missing')
+                        fprintf('    缺失的点: [%s]\n', num2str(ex.missing));
+                    end
+                    if isfield(ex, 'zeroCount')
+                        if isfield(ex, 'expected')
+                            fprintf('    0分隔符数量: %d (期望: %d)\n', ex.zeroCount, ex.expected);
+                        else
+                            fprintf('    0分隔符数量: %d (期望: %d)\n', ex.zeroCount, m-1);
+                        end
+                    end
+                    if isfield(ex, 'E_all')
+                        fprintf('    E_all: [%s]\n', num2str(ex.E_all));
+                    end
+                    if isfield(ex, 'T_all')
+                        fprintf('    T_all: [%s]\n', num2str(ex.T_all));
+                    end
+                    if isfield(ex, 'PopObj_before')
+                        fprintf('    原始目标值: f1=%.2f, f2=%.2f\n', ex.PopObj_before(1), ex.PopObj_before(2));
+                    end
+                    if isfield(ex, 'Penalty1')
+                        fprintf('    惩罚值: P1=%.2f, P2=%.2f, P3=%.2f\n', ex.Penalty1, ex.Penalty2, ex.Penalty3);
+                    end
+                end
+            end
+            fprintf('==========================================\n\n');
         end
         
     else
@@ -384,10 +792,40 @@ classdef planner_order_v3 < PROBLEM
         
         % ---------- 1. 根据 0 切分m段 ----------
         idx0   = find(route == 0);
+        % 确保有 m-1 个0分隔符
+        if length(idx0) < m - 1
+            % 如果0的数量不足，在末尾补充0
+            numZerosNeeded = (m - 1) - length(idx0);
+            % 找到非0的位置，在适当位置插入0
+            nonZeroIdx = find(route ~= 0);
+            if ~isempty(nonZeroIdx)
+                % 在非0元素之间插入0
+                for z = 1:numZerosNeeded
+                    if length(nonZeroIdx) > 1
+                        insertPos = nonZeroIdx(randi(length(nonZeroIdx)-1)) + 1;
+                        route = [route(1:insertPos-1), 0, route(insertPos:end)];
+                        nonZeroIdx = find(route ~= 0);
+                    else
+                        route = [route, 0];
+                    end
+                end
+            else
+                % 如果全是0，补充到m-1个
+                route = [route, zeros(1, numZerosNeeded)];
+            end
+            idx0 = find(route == 0);
+        elseif length(idx0) > m - 1
+            % 如果0的数量过多，只保留前m-1个
+            idx0 = idx0(1:m-1);
+        end
         idx0   = [0 idx0 numel(route)+1];          % 方便循环
         routes = cell(m,1);
         for k = 1:m
-            routes{k} = route(idx0(k)+1 : idx0(k+1)-1);
+            if k <= length(idx0) - 1
+                routes{k} = route(idx0(k)+1 : idx0(k+1)-1);
+            else
+                routes{k} = [];  % 如果段数不足，返回空
+            end
         end
         
         % 路径按 0 分段后直接用于后续计算
@@ -504,18 +942,59 @@ classdef planner_order_v3 < PROBLEM
                end
         
                % 累加
+                % 调试：检查累加前的值
+                if ~isfinite(T_k) || T_k < 0
+                    debug_stats.invalid_reasons.time_error = debug_stats.invalid_reasons.time_error + 1;
+                end
+                if ~isfinite(E_up) || ~isfinite(E_hor) || ~isfinite(E_down)
+                    debug_stats.invalid_reasons.energy_error = debug_stats.invalid_reasons.energy_error + 1;
+                end
+                
                 T_k_all = T_k_all + T_k;
                 E_k = E_k + E_up + E_hor + E_down;
+                
+                % 调试：检查累加后的值
+                if ~isfinite(T_k_all) || ~isfinite(E_k)
+                    debug_stats.invalid_reasons.time_error = debug_stats.invalid_reasons.time_error + 1;
+                    debug_stats.invalid_reasons.energy_error = debug_stats.invalid_reasons.energy_error + 1;
+                end
             end
         
             T_all(k) = T_k_all;%每架飞机的
             E_all(k) = E_k;
+            
+            % 调试：检查最终的能量和时间值
+            if ~isfinite(T_all(k)) || T_all(k) < 0
+                debug_stats.invalid_reasons.time_error = debug_stats.invalid_reasons.time_error + 1;
+            end
+            if ~isfinite(E_all(k)) || E_all(k) < 0
+                debug_stats.invalid_reasons.energy_error = debug_stats.invalid_reasons.energy_error + 1;
+            end
         end
         
-        % 目标一
-        PopObj(j,1)=sum(E_all); 
-        % 目标二
-        PopObj(j,2)=sum(T_all); 
+         % 目标一：总能耗（增加区分度）
+         baseE_sum = sum(E_all);
+         if length(E_all) > 1
+             stdE = real(std(E_all));
+             rangeE = real(range(E_all));
+             PopObj(j,1) = baseE_sum + 0.5 * max(0, stdE) + 0.05 * max(0, rangeE) + ...
+                 0.01 * sum(E_all.^2) / length(E_all);
+         else
+             PopObj(j,1) = baseE_sum;
+         end
+         PopObj(j,1) = real(PopObj(j,1));
+         
+         % 目标二：总时间（增加区分度）
+         baseT_sum = sum(T_all);
+         if length(T_all) > 1
+             stdT = real(std(T_all));
+             rangeT = real(range(T_all));
+             PopObj(j,2) = baseT_sum + 0.5 * max(0, stdT) + 0.05 * max(0, rangeT) + ...
+                 0.01 * sum(T_all.^2) / length(T_all);
+         else
+             PopObj(j,2) = baseT_sum;
+         end
+         PopObj(j,2) = real(PopObj(j,2));
          
         % 约束--载重
         for kk = 1:m
@@ -531,6 +1010,7 @@ classdef planner_order_v3 < PROBLEM
             if  power_k > maxEC
                 Penalty2=Penalty2+((power_k-maxEC)/1000);%转为KJ，对应载重约束kg
             end
+
         end
         
         % 调试输出：打印前几个解的目标值和惩罚值
@@ -541,12 +1021,23 @@ classdef planner_order_v3 < PROBLEM
             fprintf('解 %d: 惩罚值: Penalty1=%.2f, Penalty2=%.2f, Penalty3=%.2f\n', j, Penalty1, Penalty2, Penalty3);
         end
         
-        PopObj(j,1)=PopObj(j,1)+10*(Penalty1+Penalty2)+Penalty3;  % 添加顺序约束惩罚
-        PopObj(j,2)=PopObj(j,2)+10*(Penalty1+Penalty2)+Penalty3;  % 添加顺序约束惩罚
+        % 归一化惩罚项，避免目标值过大
+        % 使用相对惩罚，基于目标值的量级
+        baseE = max(1, PopObj(j,1));  % 避免除以0
+        baseT = max(1, PopObj(j,2));  % 避免除以0
         
-        % 调试输出：打印最终目标值
-        if j <= 3
-            fprintf('解 %d: 最终目标值: E=%.2f, T=%.2f\n\n', j, PopObj(j,1), PopObj(j,2));
+        % 惩罚系数：根据目标值量级调整（降低惩罚强度，避免过度惩罚）
+        penaltyCoeff = max(1, min(baseE, baseT) / 10000);  % 从1000改为10000，降低惩罚强度
+        
+        PopObj(j,1)=PopObj(j,1)+penaltyCoeff*(Penalty1+Penalty2)+Penalty3;  % 添加约束惩罚
+        PopObj(j,2)=PopObj(j,2)+penaltyCoeff*(Penalty1+Penalty2)+Penalty3;  % 添加约束惩罚
+        
+        % 确保目标值为有限值（放宽条件，只在真正无效时才设为1e10）
+        if ~isfinite(PopObj(j,1)) || PopObj(j,1) < 0 || isnan(PopObj(j,1))
+            PopObj(j,1) = 1e10;  % 设置为一个大的有限值
+        end
+        if ~isfinite(PopObj(j,2)) || PopObj(j,2) < 0 || isnan(PopObj(j,2))
+            PopObj(j,2) = 1e10;  % 设置为一个大的有限值
         end
         end
         end
