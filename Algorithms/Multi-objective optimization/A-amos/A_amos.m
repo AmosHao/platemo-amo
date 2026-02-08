@@ -116,233 +116,37 @@ classdef A_amos < ALGORITHM
                    end
                    neigSize = size(neighborhood, 1);
                    
-                   %% 父代选择策略（简化：自适应平衡全局/局部搜索）
-                   localSearchProb = BETA * gen / maxgen;
+                   %% 父代选择策略：以概率选择从全局还是当前解的聚类中选择一个个体
+                   % 聚类的作用：选择同聚类的个体进行局部搜索，或选择全局个体进行探索
+                   localSearchProb = BETA * gen / maxgen;  % 局部搜索概率（随代数增加）
                    
-                   % 统一选择逻辑：优先从可用集合选择，不足时补充
-                   if rand < localSearchProb && neigSize >= 2
-                       % 局部搜索：从邻域选择
-                       idx = randsample(neigSize, 2);
-                       parents = neighborhood(idx, :);
-                   elseif globalSize >= 2
-                       % 全局搜索：从全局聚类选择
-                       idx = randsample(globalSize, 2);
-                       parents = globalClust(idx, :);
-                   elseif neigSize >= 1
-                       % 备用：邻域+当前解
-                       parents = [neighborhood(1, :); currentSol];
+                   % 以概率选择从当前解的聚类还是全局选择
+                   if rand < localSearchProb && neigSize >= 1
+                       % 局部搜索：从当前解的聚类（邻域）中选择一个个体
+                       idx = randsample(neigSize, 1);
+                       parent = neighborhood(idx, :);
                    elseif globalSize >= 1
-                       % 备用：全局+当前解
-                       parents = [globalClust(1, :); currentSol];
+                       % 全局搜索：从全局聚类中选择一个个体
+                       idx = randsample(globalSize, 1);
+                       parent = globalClust(idx, :);
                    else
-                       % 最后备用：当前解
-                       parents = [currentSol; currentSol];
+                       % 备用：使用当前解
+                       parent = currentSol;
                    end
                    
-                   %% 简化的交叉操作（保持0分隔符结构，确保非0值不重复）
-                   if rand < pc
-                       trialSol = SimpleCrossover(parents(1, :), parents(2, :), m, varDim, n);
-                   else
-                       % 如果不交叉，从父代中选择一个
-                       trialSol = parents(randi(2), :);
-                   end
-                   
-                   %% 简化的变异操作（只操作非0元素，保持0分隔符不变，确保非0值不重复）
-                   adaptive_pm = pm * (1.5 - 0.5 * gen / maxgen);  % 从1.5*pm线性降至pm
-                   if rand < adaptive_pm
-                       trialSol = SimpleMutation(trialSol, m, varDim, n);
-                   end
-                   
-                   %% 顺序约束修复（在交叉变异后进行修复）
-                   % 使用概率性修复，保留一些违反约束的解以增加多样性
-                   if rand < repairProb
-                       trialSol = OrderConstraintRepair(trialSol, n, m);
-                   end
-                   
-                   %% 解的完整性验证和修复（关键修复：确保包含所有必需的点）
-                   % 使用概率性修复，保留一些不完整的解以增加多样性
-                   if rand < completenessProb
-                       trialSol = EnsureSolutionCompleteness(trialSol, n, m, varDim);
-                   end
-                   
-                   % **关键修复**：在调整维度前，先确保0分隔符数量正确
-                   zeroCount = sum(trialSol == 0);
-                   if zeroCount ~= m - 1
-                       % 如果0分隔符数量不对，先修正
-                       if zeroCount < m - 1
-                           % 补充0分隔符
-                           numNeeded = (m - 1) - zeroCount;
-                           nonZeroIdx = find(trialSol ~= 0);
-                           if ~isempty(nonZeroIdx) && length(nonZeroIdx) > 1
-                               insertPos = round(linspace(1, length(nonZeroIdx)-1, numNeeded+1));
-                               insertPos = insertPos(2:end);
-                               for i = length(insertPos):-1:1
-                                   pos = nonZeroIdx(insertPos(i));
-                                   trialSol = [trialSol(1:pos), 0, trialSol(pos+1:end)];
-                               end
-                           else
-                               trialSol = [trialSol, zeros(1, numNeeded)];
-                           end
-                       elseif zeroCount > m - 1
-                           % 删除多余的0
-                           zeroIdx = find(trialSol == 0);
-                           trialSol(zeroIdx(m:end)) = [];
-                       end
-                   end
-                   
-                   % **关键修复**：调整维度时，必须确保0分隔符数量始终为m-1
-                   % 如果长度小于varDim，应该补充非0值（重复已有的点），而不是补充0
-                   if size(trialSol, 2) ~= varDim
-                       if size(trialSol, 2) < varDim
-                           % 长度不足：补充非0值（重复已有的点），而不是补充0
-                           nonZeroVals = trialSol(trialSol ~= 0);
-                           if ~isempty(nonZeroVals)
-                               % 重复已有的非0值来填充
-                               numNeeded = varDim - size(trialSol, 2);
-                               % 随机选择已有的非0值来重复
-                               fillValues = nonZeroVals(randi(length(nonZeroVals), 1, numNeeded));
-                               trialSol = [trialSol, fillValues];
-                           else
-                               % 如果没有非0值，使用1-20的随机值填充
-                               fillValues = randi([1, 2*n], 1, varDim - size(trialSol, 2));
-                               trialSol = [trialSol, fillValues];
-                           end
-                       else
-                           % 长度超过varDim：截断时确保保留m-1个0分隔符
-                           zeroIdx = find(trialSol == 0);
-                           if length(zeroIdx) >= m - 1
-                               % 保留前m-1个0分隔符
-                               lastZeroIdx = zeroIdx(m-1);
-                               if lastZeroIdx < varDim
-                                   trialSol = trialSol(1:varDim);
-                               else
-                                   % 如果前m-1个0分隔符的位置已经超过varDim，需要重新调整
-                                   trialSol = trialSol(1:varDim);
-                                   % 重新确保0分隔符数量
-                                   zeroCount = sum(trialSol == 0);
-                                   if zeroCount < m - 1
-                                       numNeeded = (m - 1) - zeroCount;
-                                       nonZeroIdx = find(trialSol ~= 0);
-                                       if ~isempty(nonZeroIdx) && length(nonZeroIdx) > 1
-                                           insertPos = round(linspace(1, length(nonZeroIdx)-1, numNeeded+1));
-                                           insertPos = insertPos(2:end);
-                                           for i = length(insertPos):-1:1
-                                               pos = nonZeroIdx(insertPos(i));
-                                               trialSol = [trialSol(1:pos), 0, trialSol(pos+1:end)];
-                                           end
-                                       else
-                                           trialSol = [trialSol, zeros(1, numNeeded)];
-                                       end
-                                   end
-                               end
-                           else
-                               trialSol = trialSol(1:varDim);
-                           end
-                       end
-                   end
+                   %% 对选中的父代应用变异操作生成子代
+                   % 始终应用变异操作，确保生成新的子代
+                   trialSol = OrderPreservingMutation(parent, m, varDim, n);
                    
                    % 确保是行向量
-                   if size(trialSol, 1) > 1
-                       trialSol = trialSol(:)';
+                   if size(trialSol, 1) ~= 1
+                       trialSol = reshape(trialSol, 1, []);
                    end
                    
-                   % **最终验证**：确保0分隔符数量正确，维度正确
-                   zeroCount = sum(trialSol == 0);
-                   if zeroCount ~= m - 1
-                       % 强制修正0分隔符数量
-                       if zeroCount < m - 1
-                           numNeeded = (m - 1) - zeroCount;
-                           nonZeroIdx = find(trialSol ~= 0);
-                           if ~isempty(nonZeroIdx) && length(nonZeroIdx) > 1
-                               insertPos = round(linspace(1, length(nonZeroIdx)-1, numNeeded+1));
-                               insertPos = insertPos(2:end);
-                               for i = length(insertPos):-1:1
-                                   pos = nonZeroIdx(insertPos(i));
-                                   trialSol = [trialSol(1:pos), 0, trialSol(pos+1:end)];
-                               end
-                           else
-                               trialSol = [trialSol, zeros(1, numNeeded)];
-                           end
-                       elseif zeroCount > m - 1
-                           zeroIdx = find(trialSol == 0);
-                           trialSol(zeroIdx(m:end)) = [];
-                       end
-                   end
-                   
-                   % 最终确保维度正确
-                   if length(trialSol) ~= varDim
-                       if length(trialSol) < varDim
-                           % 补充非0值
-                           nonZeroVals = trialSol(trialSol ~= 0);
-                           if ~isempty(nonZeroVals)
-                               numNeeded = varDim - length(trialSol);
-                               fillValues = nonZeroVals(randi(length(nonZeroVals), 1, numNeeded));
-                               trialSol = [trialSol, fillValues];
-                           else
-                               fillValues = randi([1, 2*n], 1, varDim - length(trialSol));
-                               trialSol = [trialSol, fillValues];
-                           end
-                       else
-                           trialSol = trialSol(1:varDim);
-                       end
-                   end
-                   
-                   % 确保是行向量（1 x varDim）
-                   if size(trialSol, 1) ~= 1 || size(trialSol, 2) ~= varDim
-                       trialSol = reshape(trialSol, 1, varDim);
-                   end
-                   
-                   % **最终验证**：再次确保0分隔符数量正确（防止前面的操作破坏）
-                   finalZeroCount = sum(trialSol == 0);
-                   if finalZeroCount ~= m - 1
-                       % 如果还是不对，强制修正（这是最后的保障）
-                       zeroIdx = find(trialSol == 0);
-                       if finalZeroCount < m - 1
-                           numNeeded = (m - 1) - finalZeroCount;
-                           nonZeroIdx = find(trialSol ~= 0);
-                           if ~isempty(nonZeroIdx) && length(nonZeroIdx) > 1
-                               insertPos = round(linspace(1, length(nonZeroIdx)-1, numNeeded+1));
-                               insertPos = insertPos(2:end);
-                               for i = length(insertPos):-1:1
-                                   pos = nonZeroIdx(insertPos(i));
-                                   trialSol = [trialSol(1:pos), 0, trialSol(pos+1:end)];
-                               end
-                           else
-                               trialSol = [trialSol, zeros(1, numNeeded)];
-                           end
-                           % 如果插入后长度超过varDim，截断
-                           if length(trialSol) > varDim
-                               trialSol = trialSol(1:varDim);
-                           end
-                       elseif finalZeroCount > m - 1
-                           trialSol(zeroIdx(m:end)) = [];
-                           % 如果删除后长度小于varDim，补充非0值
-                           if length(trialSol) < varDim
-                               nonZeroVals = trialSol(trialSol ~= 0);
-                               if ~isempty(nonZeroVals)
-                                   numNeeded = varDim - length(trialSol);
-                                   fillValues = nonZeroVals(randi(length(nonZeroVals), 1, numNeeded));
-                                   trialSol = [trialSol, fillValues];
-                               else
-                                   fillValues = randi([1, 2*n], 1, varDim - length(trialSol));
-                                   trialSol = [trialSol, fillValues];
-                               end
-                           end
-                       end
-                   end
-                   
-                   % 添加到auxPop（确保维度匹配）
+                   % 添加到auxPop
                    if isempty(auxPop)
                        auxPop = trialSol;
                    else
-                       if size(auxPop, 2) ~= size(trialSol, 2)
-                           % 如果维度不匹配，调整auxPop或trialSol
-                           if size(auxPop, 2) < size(trialSol, 2)
-                               auxPop = [auxPop, zeros(size(auxPop, 1), size(trialSol, 2) - size(auxPop, 2))];
-                           else
-                               trialSol = [trialSol, zeros(1, size(auxPop, 2) - size(trialSol, 2))];
-                           end
-                       end
                        auxPop = [auxPop; trialSol];
                    end
                end
