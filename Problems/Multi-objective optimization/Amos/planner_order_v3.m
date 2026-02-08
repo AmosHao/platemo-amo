@@ -8,7 +8,7 @@ classdef planner_order_v3 < PROBLEM
             if isempty(obj.M); obj.M = 2; end
             % 编码维度：2*n个点（n个商家+n个客户点）+ (m-1)个0分隔符
             if isempty(obj.D); obj.D = 2*obj.n + (obj.m - 1); end
-            obj.lower = ones(1,obj.D);
+            obj.lower = zeros(1,obj.D);  % 允许0（分隔符）和1-20（商家和客户点）
             obj.upper = 2*obj.n*ones(1,obj.D);  % 最大编号为20（商家编号1-10，客户点编号11-20）
             % 注意：不能使用encoding=5（permutation），因为序列中包含重复的0分隔符
             % 使用encoding=2（integer），然后通过自定义操作符处理
@@ -51,38 +51,33 @@ classdef planner_order_v3 < PROBLEM
                 pair_order = randperm(n);
                 
                 % 构建满足顺序约束的序列
-                % 增加多样性：使用不同的策略生成初始解
+                % 确保所有初始解都满足顺序约束：商家必须在对应客户点之前
+                % 多样性通过以下方式实现：
+                % 1. 不同的商家-客户点对排列顺序（pair_order）
+                % 2. 不同的0分隔符位置
+                % 3. 不同的段内顺序（某些对可以紧邻，某些对可以分开）
                 sequence = [];
-                strategy = mod(i, 4);  % 使用4种不同策略循环
                 
                 for p_idx = 1:length(pair_order)
                     pair = pairs{pair_order(p_idx)};
-                    
-                    % 策略0-1：商家在前（满足约束）
-                    % 策略2：随机顺序（增加多样性，后续会修复）
-                    % 策略3：客户在前（违反约束，但增加探索空间）
-                    if strategy == 0 || strategy == 1
-                        % 策略0-1：商家在前（满足约束）
-                        sequence = [sequence, pair(1), pair(2)];  % 商家，客户
-                    elseif strategy == 2
-                        % 策略2：随机顺序
-                        if rand < 0.7  % 70%概率商家在前
-                            sequence = [sequence, pair(1), pair(2)];
-                        else
-                            sequence = [sequence, pair(2), pair(1)];
-                        end
-                    else
-                        % 策略3：客户在前（增加探索空间）
-                        sequence = [sequence, pair(2), pair(1)];  % 客户，商家（会违反约束，但后续会修复）
-                    end
+                    % 始终满足顺序约束：商家在前，客户在后
+                    sequence = [sequence, pair(1), pair(2)];  % 商家，客户
                 end
                 
                 % 随机选择 m-1 个位置插入0分隔符
-                % 位置范围：[1, length(sequence)-1]，确保0不在首尾
+                % 关键：由于商家-客户点是成对出现的（每个对2个元素），
+                % 0分隔符必须插入在偶数位置之后（客户点之后），不能插入在奇数位置（商家之后），
+                % 否则会拆散商家-客户点对
                 if m > 1 && length(sequence) > 1
-                    max_pos = min(length(sequence) - 1, 2*n - 1);
-                    if max_pos >= m - 1
-                        positions = randperm(max_pos, m - 1);  % 随机选择 m-1 个位置
+                    % sequence长度是2*n（n个商家-客户点对）
+                    % 可插入位置：2, 4, 6, ..., 2*n-2（偶数位置，客户点之后）
+                    % 这样不会拆散商家-客户点对
+                    even_positions = 2:2:(2*n-2);  % 所有可用的偶数位置
+                    
+                    if length(even_positions) >= m - 1
+                        % 从偶数位置中随机选择 m-1 个
+                        selected_indices = randperm(length(even_positions), m - 1);
+                        positions = even_positions(selected_indices);
                         positions = sort(positions);  % 排序
                         
                         % 在选定的位置后插入0
@@ -95,7 +90,7 @@ classdef planner_order_v3 < PROBLEM
                         end
                         result = [result, sequence(prev_pos+1:end)];
                     else
-                        % 如果位置不足，在末尾补充0
+                        % 如果偶数位置不足，在末尾补充0
                         result = sequence;
                         result = [result, zeros(1, m - 1)];
                     end
@@ -103,84 +98,54 @@ classdef planner_order_v3 < PROBLEM
                     result = sequence;
                 end
                 
-                % 确保长度正确（关键：不能补充0，因为0分隔符数量已经正确）
+                % 检查长度是否正确（用于调试，不执行修复）
                 if length(result) ~= D
-                    if length(result) < D
-                        % 如果太短，补充非0值（重复已有的点），而不是补充0
-                        nonZeroVals = result(result ~= 0);
-                        if ~isempty(nonZeroVals)
-                            numNeeded = D - length(result);
-                            fillValues = nonZeroVals(randi(length(nonZeroVals), 1, numNeeded));
-                            result = [result, fillValues];
-                        else
-                            % 如果没有非0值，使用1-20的随机值填充
-                            fillValues = randi([1, 2*n], 1, D - length(result));
-                            result = [result, fillValues];
-                        end
-                    else
-                        % 如果太长，截断（但要确保保留m-1个0分隔符）
-                        zeroIdx = find(result == 0);
-                        if length(zeroIdx) >= m - 1
-                            % 保留前m-1个0分隔符
-                            lastZeroIdx = zeroIdx(m-1);
-                            if lastZeroIdx < D
-                                result = result(1:D);
-                            else
-                                % 如果前m-1个0的位置超过D，需要重新调整
-                                result = result(1:D);
-                                % 重新确保0分隔符数量
-                                zeroCount = sum(result == 0);
-                                if zeroCount < m - 1
-                                    numNeeded = (m - 1) - zeroCount;
-                                    nonZeroIdx = find(result ~= 0);
-                                    if ~isempty(nonZeroIdx) && length(nonZeroIdx) > 1
-                                        insertPos = round(linspace(1, length(nonZeroIdx)-1, numNeeded+1));
-                                        insertPos = insertPos(2:end);
-                                        for i = length(insertPos):-1:1
-                                            pos = nonZeroIdx(insertPos(i));
-                                            result = [result(1:pos), 0, result(pos+1:end)];
-                                        end
-                                    end
-                                end
-                            end
-                        else
-                            result = result(1:D);
-                        end
+                    % 打印详细错误信息
+                    fprintf('\n========== 初始化解长度错误 [解 %d] ==========\n', i);
+                    fprintf('期望长度 D = %d (2*n + (m-1) = 2*%d + (%d-1) = %d)\n', D, n, m, D);
+                    fprintf('实际长度 = %d\n', length(result));
+                    fprintf('长度差异 = %d\n', length(result) - D);
+                    fprintf('0分隔符数量 = %d (期望: %d)\n', sum(result == 0), m - 1);
+                    fprintf('非0值数量 = %d (期望: %d)\n', sum(result ~= 0), 2*n);
+                    fprintf('sequence原始长度 = %d\n', length(sequence));
+                    fprintf('result前20个元素: [%s]\n', num2str(result(1:min(20, length(result)))));
+                    if length(result) > 20
+                        fprintf('result后20个元素: [%s]\n', num2str(result(end-min(19, length(result)-20):end)));
                     end
+                    fprintf('==========================================\n\n');
+                    % 抛出错误，停止执行
+                    error('初始化解长度不匹配：期望长度=%d，实际长度=%d', D, length(result));
                 end
                 
-                % 最终验证：确保0分隔符数量正确
+                % 最终验证：检查0分隔符数量是否正确（用于调试，不执行修复）
                 zeroCount = sum(result == 0);
                 if zeroCount ~= m - 1
-                    % 强制修正
+                    % 打印详细错误信息
+                    fprintf('\n========== 初始化解0分隔符数量错误 [解 %d] ==========\n', i);
+                    fprintf('期望0分隔符数量 = %d (m-1 = %d-1 = %d)\n', m - 1, m, m - 1);
+                    fprintf('实际0分隔符数量 = %d\n', zeroCount);
+                    fprintf('数量差异 = %d\n', zeroCount - (m - 1));
+                    fprintf('result长度 = %d (期望: %d)\n', length(result), D);
                     zeroIdx = find(result == 0);
-                    if zeroCount < m - 1
-                        numNeeded = (m - 1) - zeroCount;
-                        nonZeroIdx = find(result ~= 0);
-                        if ~isempty(nonZeroIdx) && length(nonZeroIdx) > 1
-                            insertPos = round(linspace(1, length(nonZeroIdx)-1, numNeeded+1));
-                            insertPos = insertPos(2:end);
-                            for i = length(insertPos):-1:1
-                                pos = nonZeroIdx(insertPos(i));
-                                result = [result(1:pos), 0, result(pos+1:end)];
-                            end
-                        else
-                            result = [result, zeros(1, numNeeded)];
-                        end
-                        % 如果插入后长度超过D，截断
-                        if length(result) > D
-                            result = result(1:D);
-                        end
-                    elseif zeroCount > m - 1
-                        result(zeroIdx(m:end)) = [];
+                    if ~isempty(zeroIdx)
+                        fprintf('0分隔符位置: [%s]\n', num2str(zeroIdx));
+                    else
+                        fprintf('0分隔符位置: 无\n');
                     end
+                    fprintf('result前20个元素: [%s]\n', num2str(result(1:min(20, length(result)))));
+                    if length(result) > 20
+                        fprintf('result后20个元素: [%s]\n', num2str(result(end-min(19, length(result)-20):end)));
+                    end
+                    fprintf('==========================================\n\n');
+                    % 抛出错误，停止执行
+                    error('初始化解0分隔符数量错误：期望=%d，实际=%d', m - 1, zeroCount);
                 end
                 
                 PopDec(i, :) = result;
             end
             
-            % 评估初始种群
-            Population = obj.Evaluation(PopDec);
+            % 评估初始种群，用掉N次
+            Population = obj.Evaluation(PopDec); 
         end
         %% Calculate objective values
         function PopObj = CalObj(obj,PopDec)
@@ -206,6 +171,21 @@ classdef planner_order_v3 < PROBLEM
         g=9.8;
         % 垂直高度
         h_up_down=40;
+        % 空气密度和旋翼桨盘面积（用于计算诱导速度 v_0）
+        rho_air = 1.225;  % 空气密度 (kg/m³)
+        A_rotor = 0.503;  % 旋翼桨盘面积 (m²)
+        % 论文参数（表2-1）
+        Omega = 300;      % 旋翼角速度 (rad/s)
+        R_rotor = 0.4;    % 旋翼半径 (m)
+        delta_drag = 0.012;  % 平均阻力系数
+        kappa = 1.1;      % 诱导功率修正系数
+        S_FP = 0.0151;   % 等效机身面积 (m²)
+        % 计算型阻功率常数 P_0 = (δ/8)ρsAΩ³R³
+        % 假设桨盘实度 s = bcR/(πR²)，对于4旋翼，b=4，c=0.0157
+        b_blades = 4;    % 旋翼数量
+        c_chord = 0.0157; % 翼型弦长 (m)
+        s_solidity = b_blades * c_chord * R_rotor / (pi * R_rotor^2);  % 桨盘实度
+        P_0 = (delta_drag / 8) * rho_air * s_solidity * A_rotor * Omega^3 * R_rotor^3;  % 型阻功率常数
         % 引入数据文件（包含坐标、障碍物、惩罚系数等）
         % 数据文件路径：从当前文件位置到forOrderNew26文件夹
         current_file_dir = fileparts(mfilename('fullpath'));
@@ -259,14 +239,13 @@ classdef planner_order_v3 < PROBLEM
         end
         
         % 计算考虑障碍物的距离矩阵（21×21）
-        % 行/列索引：1=配送中心(0), 2-11=商家1-10, 12-21=客户点11-20
+        % 行/列索引：1-10=商家1-10, 11-20=客户点11-20, 21=配送中心
         d_matrix = calculate_distance_matrix_with_obstacles(...
             dotss, forbidden_zones, crowded_zones, noise_zones, ...
             penalty_forbidden, penalty_crowded, penalty_noise);
-        % 时间窗矩阵（21行：配送中心，商家1-10，客户点11-20）
-        % 行索引：1=配送中心, 2-11=商家1-10, 12-21=客户点11-20
+        % 时间窗矩阵（21行：商家1-10，客户点11-20，配送中心）
+        % 行索引：1-10=商家1-10, 11-20=客户点11-20, 21=配送中心
         TW_sec = [
-            0, 100000000000;   % 配送中心
              0*60, 15*60;      % 商家1（出餐时间窗）
              0*60, 10*60;     % 商家2
              0*60, 10*60;     % 商家3
@@ -286,7 +265,8 @@ classdef planner_order_v3 < PROBLEM
             15*60, 35*60;     % 客户点17
             10*60, 30*60;     % 客户点18
              0*60, 20*60;     % 客户点19
-             5*60, 25*60      % 客户点20
+             5*60, 25*60;     % 客户点20
+            0, 100000000000   % 配送中心（第21行）
         ];
         % 时间窗惩罚项
         lam1=0.5;  % 从1.5降低到0.5，减少提前到达的惩罚
@@ -300,7 +280,7 @@ classdef planner_order_v3 < PROBLEM
         maxload=3;%最大载荷
         maxEC=800000;%电池容量
 
-    if size(PopDec,1)>1
+    if size(PopDec,1)>0
         % 调试统计
     debug_stats = struct();
     debug_stats.invalid_reasons = struct();
@@ -389,32 +369,11 @@ classdef planner_order_v3 < PROBLEM
         
         % ---------- 1. 根据 0 切分m段 ----------
         idx0   = find(route == 0);
-        % 确保有 m-1 个0分隔符
-        if length(idx0) < m - 1
-            % 如果0的数量不足，在末尾补充0
-            numZerosNeeded = (m - 1) - length(idx0);
-            % 找到非0的位置，在适当位置插入0
-            nonZeroIdx = find(route ~= 0);
-            if ~isempty(nonZeroIdx)
-                % 在非0元素之间插入0
-                for z = 1:numZerosNeeded
-                    if length(nonZeroIdx) > 1
-                        insertPos = nonZeroIdx(randi(length(nonZeroIdx)-1)) + 1;
-                        route = [route(1:insertPos-1), 0, route(insertPos:end)];
-                        nonZeroIdx = find(route ~= 0);
-                    else
-                        route = [route, 0];
-                    end
-                end
-            else
-                % 如果全是0，补充到m-1个
-                route = [route, zeros(1, numZerosNeeded)];
-            end
-            idx0 = find(route == 0);
-        elseif length(idx0) > m - 1
-            % 如果0的数量过多，只保留前m-1个
-            idx0 = idx0(1:m-1);
+        % 检查0分隔符数量是否正确（用于调试，不执行修复）
+        if length(idx0) ~= m - 1
+            fprintf('计算目标函数时检测到0的数量不对 [解 %d]: 期望=%d, 实际=%d\n', j, m - 1, length(idx0));
         end
+        % 使用实际的0分隔符数量进行分段（即使数量不对也继续计算）
         idx0   = [0 idx0 numel(route)+1];          % 方便循环
         routes = cell(m,1);
         for k = 1:m
@@ -448,38 +407,52 @@ classdef planner_order_v3 < PROBLEM
             npts = length(seg) + 2; % 段内点数+2（depot起点和终点）
         
             % 当前剩余载荷计算（考虑商家取餐和客户点配送）
-            % 商家（1-10）：取餐，载重增加
-            % 客户点（11-20）：配送，载重减少
-            segforload = [seg, 2*n+1];  % 添加配送中心作为终点（索引为2*n+1=21）
-            load_kg = zeros(npts-1, 1);
-            current_load = 0;  % 从配送中心出发时载重为0
+            % 关键：load_kg(i) 应该表示从 segforlength(i) 起飞时的载重
+            % segforlength = [0, seg, 0] 表示：depot -> seg(1) -> seg(2) -> ... -> seg(end) -> depot
+            segforlength = [0,seg,0];
+            % 计算每个点的载重状态（到达该点后的载重）
+            load_at_point = zeros(length(segforlength), 1);
+            load_at_point(1) = 0;  % depot出发时载重为0
             
-            for i = 1:npts-1
-                point_id = segforload(i);
+            for i = 2:length(segforlength)-1
+                point_id = segforlength(i);
                 if point_id >= 1 && point_id <= n
                     % 商家（编号1-10）：取餐，载重增加
                     customer_idx = point_id;  % 商家i对应客户点i+10，但demand_q索引是1-10
-                    current_load = current_load + demand_q(customer_idx);
+                    load_at_point(i) = load_at_point(i-1) + demand_q(customer_idx);
                 elseif point_id > n && point_id <= 2*n
                     % 客户点（编号11-20）：配送，载重减少
                     customer_idx = point_id - n;  % 客户点编号转换为demand_q索引（1-10）
-                    current_load = current_load - demand_q(customer_idx);
+                    load_at_point(i) = load_at_point(i-1) - demand_q(customer_idx);
+                else
+                    load_at_point(i) = load_at_point(i-1);  % 其他情况（不应该发生）
                 end
-                load_kg(i) = current_load;
             end
-            load_all(k) = max(load_kg);  % 保存每架无人机最大载重，以计算约束
+            load_at_point(end) = 0;  % 回到depot时载重为0
+            
+            % load_kg(i) 表示从 segforlength(i) 起飞时的载重（即到达 segforlength(i) 后的载重）
+            load_kg = load_at_point(1:end-1);  % 去掉最后一个点（终点depot）
+            load_all(k) = max(load_at_point);  % 保存每架无人机最大载重，以计算约束
         
                T_k_all = 0; 
                E_k     = 0;
-               segforlength = [0,seg,0];
                % 累积时间（到达每个点的时间）
                time_cum = 0;
             
             for i = 1:npts-1 
                 % 此处引入航迹规划算法，输入dot索引和坐标, 输出路程。需要缓存判断。
                 % [length]=runPlatemo_forOrder_PRMO(problem,algorithm,N,maxFE,s,M,dots,dot1,dot2,whichObj);
-                dot1=segforlength(i)+1;
-                dot2=segforlength(i+1)+1; 
+                % 索引映射：0=配送中心(21), 1-10=商家(1-10), 11-20=客户点(11-20)
+                if segforlength(i) == 0
+                    dot1 = 21;  % 配送中心
+                else
+                    dot1 = segforlength(i);  % 商家或客户点
+                end
+                if segforlength(i+1) == 0
+                    dot2 = 21;  % 配送中心
+                else
+                    dot2 = segforlength(i+1);  % 商家或客户点
+                end 
                 % dots=[dotss(dot1,:),dotss(dot2,:),];
                 % if d_matrix(dot1,dot2)==0
                 % [f_length]=runPlatemo_forOrder_PRMO(@planner_simple_maxhjd_newobj,@PRMO,100,300,20,3,dots,dot1,dot2,1);
@@ -492,22 +465,23 @@ classdef planner_order_v3 < PROBLEM
                 
                 % 调试：检查距离矩阵索引
                 if dot1 < 1 || dot1 > size(d_matrix,1) || dot2 < 1 || dot2 > size(d_matrix,2)
+                    fprintf('错误 [解 %d, 无人机 %d, 段 %d]: 距离矩阵索引越界 - dot1=%d, dot2=%d, 矩阵大小=[%d,%d]\n', ...
+                        j, k, i, dot1, dot2, size(d_matrix,1), size(d_matrix,2));
                     debug_stats.invalid_reasons.energy_error = debug_stats.invalid_reasons.energy_error + 1;
                     if length(debug_stats.invalid_examples) < 5
                         debug_stats.invalid_examples{end+1} = struct('type', 'invalid_dot_index', ...
                             'route', route, 'dot1', dot1, 'dot2', dot2, 'matrixSize', size(d_matrix), ...
                             'seg', seg, 'i', i, 'k', k);
                     end
-                    d_hor = 0;  % 使用默认值避免崩溃
                 end
                 
                 % 调试：检查距离值
                 if ~isfinite(d_hor) || d_hor < 0
+                    fprintf('错误 [解 %d, 无人机 %d, 段 %d]: 距离值无效 - d_hor=%f\n', j, k, i, d_hor);
                     debug_stats.invalid_reasons.energy_error = debug_stats.invalid_reasons.energy_error + 1;
-                    d_hor = max(0, d_hor);  % 修正为0
                 end
 
-                % 上升（仅在从 depot 或客户点起飞时）
+                % 上升（从所有点起飞时都需要上升，因为到达时都会降落）
                 t_up = h_up_down / v_u;
                 
                 % 调试：检查时间计算
@@ -516,23 +490,71 @@ classdef planner_order_v3 < PROBLEM
                     t_up = max(0.1, t_up);  % 使用最小值
                 end
                 % 此处写入上升功率计算公式
-                UAV_w = (UAV_m+load_kg(i))*g; %无人机自重w（T）
-                v_0 = UAV_w/1.23235;
-                P_up_i = 79.85628 + UAV_w*(v_u/2+sqrt((v_u/2)^2+v_0));
+                % load_kg(i) 现在正确表示从 segforlength(i) 起飞时的载重
+                UAV_w = (UAV_m+load_kg(i))*g; %无人机重量（N）
+                % 诱导速度 v_0 = sqrt((m+q)g / (2*rho*A))
+                % 其中：m+q 是总质量（kg），g 是重力加速度，rho 是空气密度，A 是旋翼桨盘面积
+                UAV_mass = UAV_m + load_kg(i);  % 总质量（kg）
+                v_0 = sqrt((UAV_mass * g) / (2 * rho_air * A_rotor));
+                sqrt_term_up = sqrt((v_u/2)^2+v_0);
+                P_up_i = 79.85628 + UAV_w*(v_u/2+sqrt_term_up);
                 E_up = P_up_i * t_up;
         
                 % 水平飞行
                 t_hor = d_hor / v_h;%此处d_hor为航迹规划算法输出的值或矩阵内存调用
-                %此处写入水平功率计算公式
-                P_hor_i = 79.85628*(1+0.00020833*v_h^4) + (1.1*UAV_w^(3/2)/sqrt(1.23235))*(sqrt((1+v_h^4)/(4*v_0^4))-v_h^2/(2*v_0))^(1/2) + 0.009249*v_h;
+                % 水平功率计算公式（根据论文公式2-38）
+                % P_h = P_0(1 + 3μ²) + P_i * sqrt_term + (1/2)ρS_FP*V_h³
+                % 其中：μ = V_h/(ΩR)，P_i = κ*T²/sqrt(2ρA)
+                
+                % 1. 型阻功率：P_pro,h = P_0(1 + 3μ²)
+                mu = v_h / (Omega * R_rotor);  % 前进比
+                P_pro_h = P_0 * (1 + 3 * mu^2);
+                
+                % 2. 诱导功率：P_i,h = κ*T²/sqrt(2ρA) * sqrt_term
+                % sqrt_term = (sqrt(1 + V_h⁴/(4v_0⁴)) - V_h²/(2v_0²))^(1/2)
+                % 注意：应该是除以 2v_0² 而不是 2v_0，这样才能保证 sqrt_inner 总是为正
+                sqrt_inner = sqrt((1+v_h^4)/(4*v_0^4)) - v_h^2/(2*v_0^2);
+                sqrt_term_hor = sqrt(sqrt_inner);  % 对 sqrt_inner 取平方根
+                P_i_h = kappa * UAV_w^2 / sqrt(2*rho_air*A_rotor) * sqrt_term_hor;
+                
+                % 3. 废阻功率：P_par = (1/2)ρS_FP*V_h³
+                P_par = 0.5 * rho_air * S_FP * v_h^3;
+                
+                % 总水平功率
+                P_hor_i = P_pro_h + P_i_h + P_par;
                 E_hor = P_hor_i * t_hor;
         
-                % 下降（仅在到达客户点或 depot 时）
+                % 下降（到达所有点时都需要下降，包括depot、商家和客户点）
                 t_down = h_up_down / v_d;
                 %此处写入下降功率计算公式
                 v_d_0=v_d/v_0;
                 P_down_i = 79.85625 + UAV_w*v_0*(0.974 -1.125*v_d_0 -1.372*v_d_0^2 -1.718*v_d_0^3 -0.655*v_d_0^4);
-                E_down = P_down_i * t_down;
+                % 注意：在风车状态（autorotation）下，P_down_i 可能为负（表示能量回收或几乎不消耗能量）
+                % 由于大多数无人机没有能量回收系统，负功率时能量消耗设为0
+                E_down = max(0, P_down_i * t_down);
+                
+                % 检测复数或异常功率（标记为无效，不使用real()掩盖）
+                % 注意：修正后 sqrt_inner 应该总是为正
+                % 注意：P_down_i < 0 在风车状态下是合理的，不再标记为异常
+                has_complex_or_negative = false;
+                if ~isreal(sqrt_term_up) || (sqrt_inner < 0 || ~isreal(sqrt_term_hor)) || ...
+                   ~isreal(P_up_i) || ~isreal(E_up) || ...
+                   ~isreal(P_hor_i) || ~isreal(E_hor) || ...
+                   ~isreal(P_down_i) || ~isreal(E_down)
+                    has_complex_or_negative = true;
+                    % 计算 sqrt_inner 的两个组成部分用于调试
+                    term1 = sqrt((1+v_h^4)/(4*v_0^4));
+                    term2 = v_h^2/(2*v_0^2);  % 修正：应该是除以 2*v_0^2
+                    fprintf('警告 [解 %d, 无人机 %d, 段 %d]: 功率计算异常（将标记为无效解）\n', j, k, i);
+                    fprintf('  v_0=%.4f, UAV_mass=%.2f, load_kg=%.2f, UAV_w=%.2f\n', v_0, UAV_mass, load_kg(i), UAV_w);
+                    fprintf('  sqrt_inner=%.4f (term1=%.4f, term2=%.4f, term1-term2=%.4f)\n', sqrt_inner, term1, term2, term1-term2);
+                    fprintf('  sqrt_term_hor=%s, P_hor_i=%s\n', num2str(sqrt_term_hor), num2str(P_hor_i));
+                    fprintf('  P_down_i=%.4f, v_d_0=%.4f, v_d=%.1f\n', P_down_i, v_d_0, v_d);
+                    % 将能量和时间设置为NaN，后续会被标记为无效解
+                    E_up = NaN;
+                    E_hor = NaN;
+                    E_down = NaN;
+                end
 
                % 计算去往每个点路上所花费的时间（单段）
                T_k_single = t_up + t_hor + t_down;
@@ -541,19 +563,19 @@ classdef planner_order_v3 < PROBLEM
 
                % ---- 基于"到达点"的时间窗计算时间成本 ----
                % 当前段是 segforlength(i) -> segforlength(i+1)
-               % 到达点索引：0=配送中心，1-10=商家，11-20=客户点
+               % 到达点索引：0=配送中心(21), 1-10=商家(1-10), 11-20=客户点(11-20)
                dest_idx = segforlength(i+1);
                if dest_idx == 0
-                   % 配送中心对应 TW_sec 的第1行
-                   tw_row = 1;
+                   % 配送中心对应 TW_sec 的第21行
+                   tw_row = 21;
                elseif dest_idx >= 1 && dest_idx <= n
-                   % 商家（1-10）对应 TW_sec 的第2-11行
-                   tw_row = dest_idx + 1;
+                   % 商家（1-10）对应 TW_sec 的第1-10行
+                   tw_row = dest_idx;
                elseif dest_idx > n && dest_idx <= 2*n
-                   % 客户点（11-20）对应 TW_sec 的第12-21行
-                   tw_row = dest_idx + 1;  % 客户点11对应第12行，客户点20对应第21行
+                   % 客户点（11-20）对应 TW_sec 的第11-20行
+                   tw_row = dest_idx;  % 客户点11对应第11行，客户点20对应第20行
                else
-                   tw_row = 1;  % 默认使用配送中心时间窗
+                   tw_row = 21;  % 默认使用配送中心时间窗
                end
                aa = TW_sec(tw_row,1);   % 时间窗下界
                bb = TW_sec(tw_row,2);   % 时间窗上界
@@ -577,6 +599,9 @@ classdef planner_order_v3 < PROBLEM
                 
                 T_k_all = T_k_all + T_k;
                 E_k = E_k + E_up + E_hor + E_down;
+                % 确保累加后的值也是实数
+                T_k_all = real(T_k_all);
+                E_k = real(E_k);
                 
                 % 调试：检查累加后的值
                 if ~isfinite(T_k_all) || ~isfinite(E_k)
@@ -585,8 +610,8 @@ classdef planner_order_v3 < PROBLEM
                 end
             end
         
-            T_all(k) = T_k_all;%每架飞机的
-            E_all(k) = E_k;
+            T_all(k) = real(T_k_all);%每架飞机的
+            E_all(k) = real(E_k);
             
             % 调试：检查最终的能量和时间值
             if ~isfinite(T_all(k)) || T_all(k) < 0
@@ -598,26 +623,30 @@ classdef planner_order_v3 < PROBLEM
         end
         
         % 目标一：总能耗（增加区分度）
-        baseE_sum = sum(E_all);
+        % 确保 E_all 和 T_all 都是实数
+        E_all = real(E_all);
+        T_all = real(T_all);
+        
+        baseE_sum = real(sum(E_all));
         if length(E_all) > 1
             % 添加区分度项：标准差、范围、平方和
             stdE = real(std(E_all));
             rangeE = real(range(E_all));
             PopObj(j,1) = baseE_sum + 0.5 * max(0, stdE) + 0.05 * max(0, rangeE) + ...
-                0.01 * sum(E_all.^2) / length(E_all);
+                0.01 * real(sum(E_all.^2)) / length(E_all);
         else
             PopObj(j,1) = baseE_sum;
         end
         PopObj(j,1) = real(PopObj(j,1));
         
         % 目标二：总时间（增加区分度）
-        baseT_sum = sum(T_all);
+        baseT_sum = real(sum(T_all));
         if length(T_all) > 1
             % 添加区分度项：标准差、范围、平方和
             stdT = real(std(T_all));
             rangeT = real(range(T_all));
             PopObj(j,2) = baseT_sum + 0.5 * max(0, stdT) + 0.05 * max(0, rangeT) + ...
-                0.01 * sum(T_all.^2) / length(T_all);
+                0.01 * real(sum(T_all.^2)) / length(T_all);
         else
             PopObj(j,2) = baseT_sum;
         end
@@ -641,14 +670,14 @@ classdef planner_order_v3 < PROBLEM
         
         % 归一化惩罚项，避免目标值过大
         % 使用相对惩罚，基于目标值的量级
-        baseE = max(1, sum(E_all));  % 避免除以0
-        baseT = max(1, sum(T_all));  % 避免除以0
+        baseE = max(1, real(sum(E_all)));  % 避免除以0，确保是实数
+        baseT = max(1, real(sum(T_all)));  % 避免除以0，确保是实数
         
         % 惩罚系数：根据目标值量级调整
-        penaltyCoeff = max(1, min(baseE, baseT) / 10000);  % 从1000改为10000，降低惩罚强度
+        penaltyCoeff = max(1, real(min(baseE, baseT)) / 10000);  % 从1000改为10000，降低惩罚强度，确保是实数
         
-        PopObj(j,1)=PopObj(j,1)+penaltyCoeff*(Penalty1+Penalty2)+Penalty3;  % 添加约束惩罚
-        PopObj(j,2)=PopObj(j,2)+penaltyCoeff*(Penalty1+Penalty2)+Penalty3;  % 添加约束惩罚
+        PopObj(j,1)=real(PopObj(j,1)+penaltyCoeff*(Penalty1+Penalty2)+Penalty3);  % 添加约束惩罚，确保是实数
+        PopObj(j,2)=real(PopObj(j,2)+penaltyCoeff*(Penalty1+Penalty2)+Penalty3);  % 添加约束惩罚，确保是实数
         
         % 确保目标值为有限值（记录无效原因）
         is_invalid = false;
@@ -746,299 +775,310 @@ classdef planner_order_v3 < PROBLEM
         end
         
     else
-                    j=1;
-        Penalty1=0; Penalty2=0; Penalty3=0;  % Penalty3用于顺序约束
-        route=PopDec(j,:);
-        
-        % ---------- 0. 检查顺序约束：商家必须在对应客户点之前访问 ----------
-        % 商家编号：1-10，对应客户点编号：11-20
-        for merchant_id = 1:n
-            customer_id = merchant_id + n;  % 客户点编号
-            merchant_pos = find(route == merchant_id);
-            customer_pos = find(route == customer_id);
-            
-            if ~isempty(customer_pos)
-                if isempty(merchant_pos)
-                    Penalty3 = Penalty3 + 1000;
-                else
-                    idx0 = find(route == 0);
-                    idx0 = [0 idx0 numel(route)+1];
-                    
-                    customer_seg = 0;
-                    merchant_seg = 0;
-                    for seg_idx = 1:length(idx0)-1
-                        seg_range = (idx0(seg_idx)+1):(idx0(seg_idx+1)-1);
-                        if any(route(seg_range) == customer_id)
-                            customer_seg = seg_idx;
-                        end
-                        if any(route(seg_range) == merchant_id)
-                            merchant_seg = seg_idx;
-                        end
-                    end
-                    
-                    if merchant_seg == customer_seg && merchant_seg > 0
-                        seg_range = (idx0(merchant_seg)+1):(idx0(merchant_seg+1)-1);
-                        merchant_pos_in_seg = find(route(seg_range) == merchant_id, 1);
-                        customer_pos_in_seg = find(route(seg_range) == customer_id, 1);
-                        if merchant_pos_in_seg >= customer_pos_in_seg
-                            Penalty3 = Penalty3 + 1000;
-                        end
-                    elseif merchant_seg > customer_seg && customer_seg > 0
-                        Penalty3 = Penalty3 + 1000;
-                    end
-                end
-            end
-        end
-        
-        % ---------- 1. 根据 0 切分m段 ----------
-        idx0   = find(route == 0);
-        % 确保有 m-1 个0分隔符
-        if length(idx0) < m - 1
-            % 如果0的数量不足，在末尾补充0
-            numZerosNeeded = (m - 1) - length(idx0);
-            % 找到非0的位置，在适当位置插入0
-            nonZeroIdx = find(route ~= 0);
-            if ~isempty(nonZeroIdx)
-                % 在非0元素之间插入0
-                for z = 1:numZerosNeeded
-                    if length(nonZeroIdx) > 1
-                        insertPos = nonZeroIdx(randi(length(nonZeroIdx)-1)) + 1;
-                        route = [route(1:insertPos-1), 0, route(insertPos:end)];
-                        nonZeroIdx = find(route ~= 0);
-                    else
-                        route = [route, 0];
-                    end
-                end
-            else
-                % 如果全是0，补充到m-1个
-                route = [route, zeros(1, numZerosNeeded)];
-            end
-            idx0 = find(route == 0);
-        elseif length(idx0) > m - 1
-            % 如果0的数量过多，只保留前m-1个
-            idx0 = idx0(1:m-1);
-        end
-        idx0   = [0 idx0 numel(route)+1];          % 方便循环
-        routes = cell(m,1);
-        for k = 1:m
-            if k <= length(idx0) - 1
-                routes{k} = route(idx0(k)+1 : idx0(k+1)-1);
-            else
-                routes{k} = [];  % 如果段数不足，返回空
-            end
-        end
-        
-        % 路径按 0 分段后直接用于后续计算
-        % --- 2. 初始化输出 ---
-        T_all = zeros(1,m);  % 每架无人机总时间
-        E_all = zeros(1,m);  % 每架无人机总能耗
-        load_all = zeros(1,m); % 每架无人机初始载重
-        
-        % --- 3. 每架无人机逐点计算 ---
-        for k = 1:m
-            seg = routes{k}; % 1 2 3
-            if isempty(seg)
-                continue;
-            end
-        
-            % 路径点：depot -> seg(1) -> seg(2) -> ... -> seg(end) -> depot
-            % pts = [depot; customerXY(seg,:); depot];
-            npts = length(seg) + 2; %3+2=5
-        
-            % 当前剩余载荷计算（考虑商家取餐和客户点配送）
-            % 商家（1-10）：取餐，载重增加
-            % 客户点（11-20）：配送，载重减少
-            segforload = [seg, 2*n+1];  % 添加配送中心作为终点（索引为2*n+1=21）
-            load_kg = zeros(npts-1, 1);
-            current_load = 0;  % 从配送中心出发时载重为0
-            
-            for i = 1:npts-1
-                point_id = segforload(i);
-                if point_id >= 1 && point_id <= n
-                    % 商家（编号1-10）：取餐，载重增加
-                    customer_idx = point_id;  % 商家i对应客户点i+10，但demand_q索引是1-10
-                    current_load = current_load + demand_q(customer_idx);
-                elseif point_id > n && point_id <= 2*n
-                    % 客户点（编号11-20）：配送，载重减少
-                    customer_idx = point_id - n;  % 客户点编号转换为demand_q索引（1-10）
-                    current_load = current_load - demand_q(customer_idx);
-                end
-                load_kg(i) = current_load;
-            end
-            load_all(k) = max(load_kg);  % 保存每架无人机最大载重，以计算约束
-        
-               T_k_all = 0; 
-               E_k     = 0;
-               segforlength = [0,seg,0];
-               % 累积时间（到达每个点的时间）
-               time_cum = 0;
-            
-            for i = 1:npts-1 
-                % 此处引入航迹规划算法，输入dot索引和坐标, 输出路程。需要缓存判断。
-                % [length]=runPlatemo_forOrder_PRMO(problem,algorithm,N,maxFE,s,M,dots,dot1,dot2,whichObj);
-                dot1=segforlength(i)+1;
-                dot2=segforlength(i+1)+1; 
-                % dots=[dotss(dot1,:),dotss(dot2,:),];
-                % if d_matrix(dot1,dot2)==0
-                % [f_length]=runPlatemo_forOrder_PRMO(@planner_simple_maxhjd_newobj,@simplePRGOCEA,100,30000,20,3,dots,dot1,dot2,1);
-                % d_matrix(dot1,dot2)=f_length;
-                % d_matrix(dot2,dot1)=f_length;
-                % d_hor=f_length;
-                % else
-                d_hor=d_matrix(dot1,dot2);
-                % end
-        
-                % 上升（仅在从 depot 或客户点起飞时）
-                t_up = h_up_down / v_u;
-                % 此处写入上升功率计算公式
-                UAV_w = (UAV_m+load_kg(i))*g; %无人机自重w（T）
-                v_0 = UAV_w/1.23235;
-                P_up_i = 79.85628 + UAV_w*(v_u/2+sqrt((v_u/2)^2+v_0));
-                E_up = P_up_i * t_up;
-        
-                % 水平飞行
-                t_hor = d_hor / v_h;%此处d_hor为航迹规划算法输出的值或矩阵内存调用
-                %此处写入水平功率计算公式
-                P_hor_i = 79.85628*(1+0.00020833*v_h^4) + (1.1*UAV_w^(3/2)/sqrt(1.23235))*(sqrt((1+v_h^4)/(4*v_0^4))-v_h^2/(2*v_0))^(1/2) + 0.009249*v_h;
-                E_hor = P_hor_i * t_hor;
-        
-                % 下降（仅在到达客户点或 depot 时）
-                t_down = h_up_down / v_d;
-                %此处写入下降功率计算公式
-                v_d_0=v_d/v_0;
-                P_down_i = 79.85625 + UAV_w*v_0*(0.974 -1.125*v_d_0 -1.372*v_d_0^2 -1.718*v_d_0^3 -0.655*v_d_0^4);
-                E_down = P_down_i * t_down;
 
-               % 计算去往每个点路上所花费的时间（单段）
-               T_k_single = t_up + t_hor + t_down;
-               % 累积到达时间（从出发到当前“到达点”的总时间）
-               time_cum = time_cum + T_k_single;
-
-               % ---- 基于"到达点"的时间窗计算时间成本 ----
-               % 当前段是 segforlength(i) -> segforlength(i+1)
-               % 到达点索引：0=配送中心，1-10=商家，11-20=客户点
-               dest_idx = segforlength(i+1);
-               if dest_idx == 0
-                   % 配送中心对应 TW_sec 的第1行
-                   tw_row = 1;
-               elseif dest_idx >= 1 && dest_idx <= n
-                   % 商家（1-10）对应 TW_sec 的第2-11行
-                   tw_row = dest_idx + 1;
-               elseif dest_idx > n && dest_idx <= 2*n
-                   % 客户点（11-20）对应 TW_sec 的第12-21行
-                   tw_row = dest_idx + 1;  % 客户点11对应第12行，客户点20对应第21行
-               else
-                   tw_row = 1;  % 默认使用配送中心时间窗
-               end
-               aa = TW_sec(tw_row,1);   % 时间窗下界
-               bb = TW_sec(tw_row,2);   % 时间窗上界
-
-               if time_cum < aa         % 提前到达
-                   T_k = lam1*(aa - time_cum);
-               elseif time_cum <= bb    % 在时间窗内到达
-                   T_k = time_cum - aa;
-               else                     % 晚到达
-                   T_k = lam2*(time_cum - bb);
-               end
-        
-               % 累加
-                % 调试：检查累加前的值
-                if ~isfinite(T_k) || T_k < 0
-                    debug_stats.invalid_reasons.time_error = debug_stats.invalid_reasons.time_error + 1;
-                end
-                if ~isfinite(E_up) || ~isfinite(E_hor) || ~isfinite(E_down)
-                    debug_stats.invalid_reasons.energy_error = debug_stats.invalid_reasons.energy_error + 1;
-                end
-                
-                T_k_all = T_k_all + T_k;
-                E_k = E_k + E_up + E_hor + E_down;
-                
-                % 调试：检查累加后的值
-                if ~isfinite(T_k_all) || ~isfinite(E_k)
-                    debug_stats.invalid_reasons.time_error = debug_stats.invalid_reasons.time_error + 1;
-                    debug_stats.invalid_reasons.energy_error = debug_stats.invalid_reasons.energy_error + 1;
-                end
-            end
-        
-            T_all(k) = T_k_all;%每架飞机的
-            E_all(k) = E_k;
-            
-            % 调试：检查最终的能量和时间值
-            if ~isfinite(T_all(k)) || T_all(k) < 0
-                debug_stats.invalid_reasons.time_error = debug_stats.invalid_reasons.time_error + 1;
-            end
-            if ~isfinite(E_all(k)) || E_all(k) < 0
-                debug_stats.invalid_reasons.energy_error = debug_stats.invalid_reasons.energy_error + 1;
-            end
-        end
-        
-         % 目标一：总能耗（增加区分度）
-         baseE_sum = sum(E_all);
-         if length(E_all) > 1
-             stdE = real(std(E_all));
-             rangeE = real(range(E_all));
-             PopObj(j,1) = baseE_sum + 0.5 * max(0, stdE) + 0.05 * max(0, rangeE) + ...
-                 0.01 * sum(E_all.^2) / length(E_all);
-         else
-             PopObj(j,1) = baseE_sum;
-         end
-         PopObj(j,1) = real(PopObj(j,1));
-         
-         % 目标二：总时间（增加区分度）
-         baseT_sum = sum(T_all);
-         if length(T_all) > 1
-             stdT = real(std(T_all));
-             rangeT = real(range(T_all));
-             PopObj(j,2) = baseT_sum + 0.5 * max(0, stdT) + 0.05 * max(0, rangeT) + ...
-                 0.01 * sum(T_all.^2) / length(T_all);
-         else
-             PopObj(j,2) = baseT_sum;
-         end
-         PopObj(j,2) = real(PopObj(j,2));
-         
-        % 约束--载重
-        for kk = 1:m
-            load_k = load_all(kk);
-            if load_k > maxload
-                Penalty1=Penalty1+(load_k-maxload);
-            end
-        end
-        
-        % 约束--电量
-        for kk = 1:m
-            power_k = E_all(kk);
-            if  power_k > maxEC
-                Penalty2=Penalty2+((power_k-maxEC)/1000);%转为KJ，对应载重约束kg
-            end
-
-        end
-        
-        % 调试输出：打印前几个解的目标值和惩罚值
-        if j <= 3  % 只打印前3个解的信息
-            fprintf('解 %d: E_all=[%.2f,%.2f,%.2f], T_all=[%.2f,%.2f,%.2f]\n', ...
-                j, E_all(1), E_all(2), E_all(3), T_all(1), T_all(2), T_all(3));
-            fprintf('解 %d: 原始目标值: E=%.2f, T=%.2f\n', j, PopObj(j,1), PopObj(j,2));
-            fprintf('解 %d: 惩罚值: Penalty1=%.2f, Penalty2=%.2f, Penalty3=%.2f\n', j, Penalty1, Penalty2, Penalty3);
-        end
-        
-        % 归一化惩罚项，避免目标值过大
-        % 使用相对惩罚，基于目标值的量级
-        baseE = max(1, PopObj(j,1));  % 避免除以0
-        baseT = max(1, PopObj(j,2));  % 避免除以0
-        
-        % 惩罚系数：根据目标值量级调整（降低惩罚强度，避免过度惩罚）
-        penaltyCoeff = max(1, min(baseE, baseT) / 10000);  % 从1000改为10000，降低惩罚强度
-        
-        PopObj(j,1)=PopObj(j,1)+penaltyCoeff*(Penalty1+Penalty2)+Penalty3;  % 添加约束惩罚
-        PopObj(j,2)=PopObj(j,2)+penaltyCoeff*(Penalty1+Penalty2)+Penalty3;  % 添加约束惩罚
-        
-        % 确保目标值为有限值（放宽条件，只在真正无效时才设为1e10）
-        if ~isfinite(PopObj(j,1)) || PopObj(j,1) < 0 || isnan(PopObj(j,1))
-            PopObj(j,1) = 1e10;  % 设置为一个大的有限值
-        end
-        if ~isfinite(PopObj(j,2)) || PopObj(j,2) < 0 || isnan(PopObj(j,2))
-            PopObj(j,2) = 1e10;  % 设置为一个大的有限值
-        end
+        fprintf('PopDec is empty\n');
+        %             j=1;
+        % Penalty1=0; Penalty2=0; Penalty3=0;  % Penalty3用于顺序约束
+        % route=PopDec(j,:);
+        % 
+        % % ---------- 0. 检查顺序约束：商家必须在对应客户点之前访问 ----------
+        % % 商家编号：1-10，对应客户点编号：11-20
+        % for merchant_id = 1:n
+        %     customer_id = merchant_id + n;  % 客户点编号
+        %     merchant_pos = find(route == merchant_id);
+        %     customer_pos = find(route == customer_id);
+        % 
+        %     if ~isempty(customer_pos)
+        %         if isempty(merchant_pos)
+        %             Penalty3 = Penalty3 + 1000;
+        %         else
+        %             idx0 = find(route == 0);
+        %             idx0 = [0 idx0 numel(route)+1];
+        % 
+        %             customer_seg = 0;
+        %             merchant_seg = 0;
+        %             for seg_idx = 1:length(idx0)-1
+        %                 seg_range = (idx0(seg_idx)+1):(idx0(seg_idx+1)-1);
+        %                 if any(route(seg_range) == customer_id)
+        %                     customer_seg = seg_idx;
+        %                 end
+        %                 if any(route(seg_range) == merchant_id)
+        %                     merchant_seg = seg_idx;
+        %                 end
+        %             end
+        % 
+        %             if merchant_seg == customer_seg && merchant_seg > 0
+        %                 seg_range = (idx0(merchant_seg)+1):(idx0(merchant_seg+1)-1);
+        %                 merchant_pos_in_seg = find(route(seg_range) == merchant_id, 1);
+        %                 customer_pos_in_seg = find(route(seg_range) == customer_id, 1);
+        %                 if merchant_pos_in_seg >= customer_pos_in_seg
+        %                     Penalty3 = Penalty3 + 1000;
+        %                 end
+        %             elseif merchant_seg > customer_seg && customer_seg > 0
+        %                 Penalty3 = Penalty3 + 1000;
+        %             end
+        %         end
+        %     end
+        % end
+        % 
+        % % ---------- 1. 根据 0 切分m段 ----------
+        % idx0   = find(route == 0);
+        % % 确保有 m-1 个0分隔符
+        % if length(idx0) < m - 1
+        %     % 如果0的数量不足，在末尾补充0
+        %     numZerosNeeded = (m - 1) - length(idx0);
+        %     % 找到非0的位置，在适当位置插入0
+        %     nonZeroIdx = find(route ~= 0);
+        %     if ~isempty(nonZeroIdx)
+        %         % 在非0元素之间插入0
+        %         for z = 1:numZerosNeeded
+        %             if length(nonZeroIdx) > 1
+        %                 insertPos = nonZeroIdx(randi(length(nonZeroIdx)-1)) + 1;
+        %                 route = [route(1:insertPos-1), 0, route(insertPos:end)];
+        %                 nonZeroIdx = find(route ~= 0);
+        %             else
+        %                 route = [route, 0];
+        %             end
+        %         end
+        %     else
+        %         % 如果全是0，补充到m-1个
+        %         route = [route, zeros(1, numZerosNeeded)];
+        %     end
+        %     idx0 = find(route == 0);
+        % elseif length(idx0) > m - 1
+        %     % 如果0的数量过多，只保留前m-1个
+        %     idx0 = idx0(1:m-1);
+        % end
+        % idx0   = [0 idx0 numel(route)+1];          % 方便循环
+        % routes = cell(m,1);
+        % for k = 1:m
+        %     if k <= length(idx0) - 1
+        %         routes{k} = route(idx0(k)+1 : idx0(k+1)-1);
+        %     else
+        %         routes{k} = [];  % 如果段数不足，返回空
+        %     end
+        % end
+        % 
+        % % 路径按 0 分段后直接用于后续计算
+        % % --- 2. 初始化输出 ---
+        % T_all = zeros(1,m);  % 每架无人机总时间
+        % E_all = zeros(1,m);  % 每架无人机总能耗
+        % load_all = zeros(1,m); % 每架无人机初始载重
+        % 
+        % % --- 3. 每架无人机逐点计算 ---
+        % for k = 1:m
+        %     seg = routes{k}; % 1 2 3
+        %     if isempty(seg)
+        %         continue;
+        %     end
+        % 
+        %     % 路径点：depot -> seg(1) -> seg(2) -> ... -> seg(end) -> depot
+        %     % pts = [depot; customerXY(seg,:); depot];
+        %     npts = length(seg) + 2; %3+2=5
+        % 
+        %     % 当前剩余载荷计算（考虑商家取餐和客户点配送）
+        %     % 商家（1-10）：取餐，载重增加
+        %     % 客户点（11-20）：配送，载重减少
+        %     segforload = [seg, 2*n+1];  % 添加配送中心作为终点（索引为2*n+1=21）
+        %     load_kg = zeros(npts-1, 1);
+        %     current_load = 0;  % 从配送中心出发时载重为0
+        % 
+        %     for i = 1:npts-1
+        %         point_id = segforload(i);
+        %         if point_id >= 1 && point_id <= n
+        %             % 商家（编号1-10）：取餐，载重增加
+        %             customer_idx = point_id;  % 商家i对应客户点i+10，但demand_q索引是1-10
+        %             current_load = current_load + demand_q(customer_idx);
+        %         elseif point_id > n && point_id <= 2*n
+        %             % 客户点（编号11-20）：配送，载重减少
+        %             customer_idx = point_id - n;  % 客户点编号转换为demand_q索引（1-10）
+        %             current_load = current_load - demand_q(customer_idx);
+        %         end
+        %         load_kg(i) = current_load;
+        %     end
+        %     load_all(k) = max(load_kg);  % 保存每架无人机最大载重，以计算约束
+        % 
+        %        T_k_all = 0; 
+        %        E_k     = 0;
+        %        segforlength = [0,seg,0];
+        %        % 累积时间（到达每个点的时间）
+        %        time_cum = 0;
+        % 
+        %     for i = 1:npts-1 
+        %         % 此处引入航迹规划算法，输入dot索引和坐标, 输出路程。需要缓存判断。
+        %         % [length]=runPlatemo_forOrder_PRMO(problem,algorithm,N,maxFE,s,M,dots,dot1,dot2,whichObj);
+        %         % 索引映射：0=配送中心(21), 1-10=商家(1-10), 11-20=客户点(11-20)
+        %         if segforlength(i) == 0
+        %             dot1 = 21;  % 配送中心
+        %         else
+        %             dot1 = segforlength(i);  % 商家或客户点
+        %         end
+        %         if segforlength(i+1) == 0
+        %             dot2 = 21;  % 配送中心
+        %         else
+        %             dot2 = segforlength(i+1);  % 商家或客户点
+        %         end 
+        %         % dots=[dotss(dot1,:),dotss(dot2,:),];
+        %         % if d_matrix(dot1,dot2)==0
+        %         % [f_length]=runPlatemo_forOrder_PRMO(@planner_simple_maxhjd_newobj,@simplePRGOCEA,100,30000,20,3,dots,dot1,dot2,1);
+        %         % d_matrix(dot1,dot2)=f_length;
+        %         % d_matrix(dot2,dot1)=f_length;
+        %         % d_hor=f_length;
+        %         % else
+        %         d_hor=d_matrix(dot1,dot2);
+        %         % end
+        % 
+        %         % 上升（从所有点起飞时都需要上升，因为到达时都会降落）
+        %         t_up = h_up_down / v_u;
+        %         % 此处写入上升功率计算公式
+        %         UAV_w = (UAV_m+load_kg(i))*g; %无人机自重w（T）
+        %         v_0 = UAV_w/1.23235;
+        %         P_up_i = 79.85628 + UAV_w*(v_u/2+sqrt((v_u/2)^2+v_0));
+        %         E_up = P_up_i * t_up;
+        % 
+        %         % 水平飞行
+        %         t_hor = d_hor / v_h;%此处d_hor为航迹规划算法输出的值或矩阵内存调用
+        %         %此处写入水平功率计算公式
+        %         P_hor_i = 79.85628*(1+0.00020833*v_h^4) + (1.1*UAV_w^(3/2)/sqrt(1.23235))*(sqrt((1+v_h^4)/(4*v_0^4))-v_h^2/(2*v_0))^(1/2) + 0.009249*v_h;
+        %         E_hor = P_hor_i * t_hor;
+        % 
+        %         % 下降（到达所有点时都需要下降，包括depot、商家和客户点）
+        %         t_down = h_up_down / v_d;
+        %         %此处写入下降功率计算公式
+        %         v_d_0=v_d/v_0;
+        %         P_down_i = 79.85625 + UAV_w*v_0*(0.974 -1.125*v_d_0 -1.372*v_d_0^2 -1.718*v_d_0^3 -0.655*v_d_0^4);
+        %         E_down = P_down_i * t_down;
+        % 
+        %        % 计算去往每个点路上所花费的时间（单段）
+        %        T_k_single = t_up + t_hor + t_down;
+        %        % 累积到达时间（从出发到当前“到达点”的总时间）
+        %        time_cum = time_cum + T_k_single;
+        % 
+        %        % ---- 基于"到达点"的时间窗计算时间成本 ----
+        %        % 当前段是 segforlength(i) -> segforlength(i+1)
+        %        % 到达点索引：0=配送中心(21), 1-10=商家(1-10), 11-20=客户点(11-20)
+        %        dest_idx = segforlength(i+1);
+        %        if dest_idx == 0
+        %            % 配送中心对应 TW_sec 的第21行
+        %            tw_row = 21;
+        %        elseif dest_idx >= 1 && dest_idx <= n
+        %            % 商家（1-10）对应 TW_sec 的第1-10行
+        %            tw_row = dest_idx;
+        %        elseif dest_idx > n && dest_idx <= 2*n
+        %            % 客户点（11-20）对应 TW_sec 的第11-20行
+        %            tw_row = dest_idx;  % 客户点11对应第11行，客户点20对应第20行
+        %        else
+        %            tw_row = 21;  % 默认使用配送中心时间窗
+        %        end
+        %        aa = TW_sec(tw_row,1);   % 时间窗下界
+        %        bb = TW_sec(tw_row,2);   % 时间窗上界
+        % 
+        %        if time_cum < aa         % 提前到达
+        %            T_k = lam1*(aa - time_cum);
+        %        elseif time_cum <= bb    % 在时间窗内到达
+        %            T_k = time_cum - aa;
+        %        else                     % 晚到达
+        %            T_k = lam2*(time_cum - bb);
+        %        end
+        % 
+        %        % 累加
+        %         % 调试：检查累加前的值
+        %         if ~isfinite(T_k) || T_k < 0
+        %             debug_stats.invalid_reasons.time_error = debug_stats.invalid_reasons.time_error + 1;
+        %         end
+        %         if ~isfinite(E_up) || ~isfinite(E_hor) || ~isfinite(E_down)
+        %             debug_stats.invalid_reasons.energy_error = debug_stats.invalid_reasons.energy_error + 1;
+        %         end
+        % 
+        %         T_k_all = T_k_all + T_k;
+        %         E_k = E_k + E_up + E_hor + E_down;
+        % 
+        %         % 调试：检查累加后的值
+        %         if ~isfinite(T_k_all) || ~isfinite(E_k)
+        %             debug_stats.invalid_reasons.time_error = debug_stats.invalid_reasons.time_error + 1;
+        %             debug_stats.invalid_reasons.energy_error = debug_stats.invalid_reasons.energy_error + 1;
+        %         end
+        %     end
+        % 
+        %     T_all(k) = T_k_all;%每架飞机的
+        %     E_all(k) = E_k;
+        % 
+        %     % 调试：检查最终的能量和时间值
+        %     if ~isfinite(T_all(k)) || T_all(k) < 0
+        %         debug_stats.invalid_reasons.time_error = debug_stats.invalid_reasons.time_error + 1;
+        %     end
+        %     if ~isfinite(E_all(k)) || E_all(k) < 0
+        %         debug_stats.invalid_reasons.energy_error = debug_stats.invalid_reasons.energy_error + 1;
+        %     end
+        % end
+        % 
+        %  % 目标一：总能耗（增加区分度）
+        %  baseE_sum = sum(E_all);
+        %  if length(E_all) > 1
+        %      stdE = real(std(E_all));
+        %      rangeE = real(range(E_all));
+        %      PopObj(j,1) = baseE_sum + 0.5 * max(0, stdE) + 0.05 * max(0, rangeE) + ...
+        %          0.01 * sum(E_all.^2) / length(E_all);
+        %  else
+        %      PopObj(j,1) = baseE_sum;
+        %  end
+        %  PopObj(j,1) = real(PopObj(j,1));
+        % 
+        %  % 目标二：总时间（增加区分度）
+        %  baseT_sum = sum(T_all);
+        %  if length(T_all) > 1
+        %      stdT = real(std(T_all));
+        %      rangeT = real(range(T_all));
+        %      PopObj(j,2) = baseT_sum + 0.5 * max(0, stdT) + 0.05 * max(0, rangeT) + ...
+        %          0.01 * sum(T_all.^2) / length(T_all);
+        %  else
+        %      PopObj(j,2) = baseT_sum;
+        %  end
+        %  PopObj(j,2) = real(PopObj(j,2));
+        % 
+        % % 约束--载重
+        % for kk = 1:m
+        %     load_k = load_all(kk);
+        %     if load_k > maxload
+        %         Penalty1=Penalty1+(load_k-maxload);
+        %     end
+        % end
+        % 
+        % % 约束--电量
+        % for kk = 1:m
+        %     power_k = E_all(kk);
+        %     if  power_k > maxEC
+        %         Penalty2=Penalty2+((power_k-maxEC)/1000);%转为KJ，对应载重约束kg
+        %     end
+        % 
+        % end
+        % 
+        % % 调试输出：打印前几个解的目标值和惩罚值
+        % if j <= 3  % 只打印前3个解的信息
+        %     fprintf('解 %d: E_all=[%.2f,%.2f,%.2f], T_all=[%.2f,%.2f,%.2f]\n', ...
+        %         j, E_all(1), E_all(2), E_all(3), T_all(1), T_all(2), T_all(3));
+        %     fprintf('解 %d: 原始目标值: E=%.2f, T=%.2f\n', j, PopObj(j,1), PopObj(j,2));
+        %     fprintf('解 %d: 惩罚值: Penalty1=%.2f, Penalty2=%.2f, Penalty3=%.2f\n', j, Penalty1, Penalty2, Penalty3);
+        % end
+        % 
+        % % 归一化惩罚项，避免目标值过大
+        % % 使用相对惩罚，基于目标值的量级
+        % baseE = max(1, PopObj(j,1));  % 避免除以0
+        % baseT = max(1, PopObj(j,2));  % 避免除以0
+        % 
+        % % 惩罚系数：根据目标值量级调整（降低惩罚强度，避免过度惩罚）
+        % penaltyCoeff = max(1, min(baseE, baseT) / 10000);  % 从1000改为10000，降低惩罚强度
+        % 
+        % PopObj(j,1)=PopObj(j,1)+penaltyCoeff*(Penalty1+Penalty2)+Penalty3;  % 添加约束惩罚
+        % PopObj(j,2)=PopObj(j,2)+penaltyCoeff*(Penalty1+Penalty2)+Penalty3;  % 添加约束惩罚
+        % 
+        % % 确保目标值为有限值（放宽条件，只在真正无效时才设为1e10）
+        % if ~isfinite(PopObj(j,1)) || PopObj(j,1) < 0 || isnan(PopObj(j,1))
+        %     PopObj(j,1) = 1e10;  % 设置为一个大的有限值
+        % end
+        % if ~isfinite(PopObj(j,2)) || PopObj(j,2) < 0 || isnan(PopObj(j,2))
+        %     PopObj(j,2) = 1e10;  % 设置为一个大的有限值
+        % end
         end
         end
 

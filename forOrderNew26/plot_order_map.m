@@ -129,7 +129,7 @@ for i = 1:size(noise_zones, 1)
 end
 
 % ========== 绘制配送中心（紫色大圆点） ==========
-depot = dotss(1, :);
+depot = dotss(21, :);  % 配送中心在第21行（最后一行）
 % 配送中心高度设为0（地面）
 scatter3(depot(1), depot(2), 0, 200, [0.8, 0.6, 0.8], 'filled', ...
     'MarkerEdgeColor', 'k', 'LineWidth', 2);
@@ -138,7 +138,7 @@ text(depot(1), depot(2) + 200, 250, '配送中心', 'FontSize', 10, 'FontWeight'
     'HorizontalAlignment', 'center', 'VerticalAlignment', 'bottom');
 
 % ========== 绘制商家（蓝色圆点，编号1-10） ==========
-merchants = dotss(2:11, :);
+merchants = dotss(1:10, :);  % 商家在第1-10行
 % 商家高度设为0（地面）
 scatter3(merchants(:, 1), merchants(:, 2), zeros(size(merchants, 1), 1), 100, 'b', 'filled', ...
     'MarkerEdgeColor', 'k', 'LineWidth', 1.5);
@@ -150,7 +150,7 @@ for i = 1:size(merchants, 1)
 end
 
 % ========== 绘制客户点（绿色圆点，编号11-20） ==========
-customers = dotss(12:21, :);
+customers = dotss(11:20, :);  % 客户点在第11-20行
 % 客户点高度设为0（地面）
 scatter3(customers(:, 1), customers(:, 2), zeros(size(customers, 1), 1), 100, 'g', 'filled', ...
     'MarkerEdgeColor', 'k', 'LineWidth', 1.5);
