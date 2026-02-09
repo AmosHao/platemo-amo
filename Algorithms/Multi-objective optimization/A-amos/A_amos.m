@@ -90,11 +90,13 @@ classdef A_amos < ALGORITHM
                    
                    % 确保currentSol维度正确
                    if length(currentSol) ~= varDim
-                       if length(currentSol) < varDim
-                           currentSol = [currentSol, zeros(1, varDim - length(currentSol))];
-                       else
-                           currentSol = currentSol(1:varDim);
-                       end
+                       % if length(currentSol) < varDim
+                       %     currentSol = [currentSol, zeros(1, varDim - length(currentSol))];
+                       % else
+                       %     currentSol = currentSol(1:varDim);
+                       % end
+                       fprintf('Warning: 维度不正确');
+                       
                    end
                    
                    % 获取当前个体的邻域

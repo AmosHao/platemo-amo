@@ -16,10 +16,8 @@ function offspring = OrderPreservingMutation(individual, m, varDim, n)
 
     % 确保输入维度正确
     if length(individual) ~= varDim
-        individual = individual(1:min(varDim, length(individual)));
-        if length(individual) < varDim
-            individual = [individual, zeros(1, varDim - length(individual))];
-        end
+        fprintf('Warning: 维度不正确');
+        return;
     end
     
     % 找到0分隔符的位置
@@ -27,23 +25,8 @@ function offspring = OrderPreservingMutation(individual, m, varDim, n)
     
     % 如果0分隔符数量不对，先修正
     if length(idx0) ~= m - 1
-        if length(idx0) < m - 1
-            nonZeroIdx = find(individual ~= 0);
-            if ~isempty(nonZeroIdx) && length(nonZeroIdx) > 1
-                numNeeded = (m - 1) - length(idx0);
-                insertPos = round(linspace(1, length(nonZeroIdx)-1, numNeeded+1));
-                insertPos = insertPos(2:end);
-                for i = length(insertPos):-1:1
-                    pos = nonZeroIdx(insertPos(i));
-                    individual = [individual(1:pos), 0, individual(pos+1:end)];
-                end
-            else
-                individual = [individual, zeros(1, (m-1) - length(idx0))];
-            end
-            idx0 = find(individual == 0);
-        else
-            idx0 = idx0(1:m-1);
-        end
+        fprintf('Warning: 0分隔符数量错误');
+        return;
     end
     
     % 分段：根据0分隔符将路径分成m段
@@ -54,15 +37,15 @@ function offspring = OrderPreservingMutation(individual, m, varDim, n)
     end
     
     % 随机选择一种变异方式
-    mutation_type = randi(3);
+    mutation_type = 2;
     
     switch mutation_type
         case 1
-            % 方式1：把某个无人机的飞行段中的某个商家移到最后
+            % 方式1：把某个无人机的飞行段中的某个商家移到最前
             offspring = mutation_type1(individual, segments, idx0_extended, m, n);
             
         case 2
-            % 方式2：某段的某个客户点移到首位
+            % 方式2：某段的某个客户点移到最后
             offspring = mutation_type2(individual, segments, idx0_extended, m, n);
             
         case 3
@@ -112,7 +95,7 @@ function offspring = OrderPreservingMutation(individual, m, varDim, n)
 end
 
 function offspring = mutation_type1(individual, segments, idx0_extended, m, n)
-    % 方式1：把某个无人机的飞行段中的某个商家移到最后
+    % 方式1：把某个无人机的飞行段中的某个商家移到首位
     
     % 找到包含商家的段
     valid_segments = [];
@@ -143,10 +126,10 @@ function offspring = mutation_type1(individual, segments, idx0_extended, m, n)
     merchant_idx_in_seg = merchant_positions(randi(length(merchant_positions)));
     merchant_id = seg(merchant_idx_in_seg);
     
-    % 将该商家移到该段的最后
+    % 将该商家移到该段的首位
     new_seg = seg;
     new_seg(merchant_idx_in_seg) = [];  % 删除原位置
-    new_seg = [new_seg, merchant_id];   % 添加到末尾
+    new_seg = [merchant_id, new_seg];   % 添加到首位
     
     % 重建解
     offspring = individual;
@@ -156,7 +139,7 @@ function offspring = mutation_type1(individual, segments, idx0_extended, m, n)
 end
 
 function offspring = mutation_type2(individual, segments, idx0_extended, m, n)
-    % 方式2：某段的某个客户点移到首位
+    % 方式2：某段的某个客户点移到最后
     
     % 找到包含客户点的段
     valid_segments = [];
@@ -187,10 +170,10 @@ function offspring = mutation_type2(individual, segments, idx0_extended, m, n)
     customer_idx_in_seg = customer_positions(randi(length(customer_positions)));
     customer_id = seg(customer_idx_in_seg);
     
-    % 将该客户点移到该段的首位
+    % 将该客户点移到该段的最后
     new_seg = seg;
     new_seg(customer_idx_in_seg) = [];  % 删除原位置
-    new_seg = [customer_id, new_seg];   % 添加到首位
+    new_seg = [new_seg, customer_id];   % 添加到最后
     
     % 重建解
     offspring = individual;
@@ -287,6 +270,7 @@ end
 function new_zero_pos = traverse_forward(individual, idx0_extended, zero_idx, seg_before, n)
     % 往前遍历（向seg_before方向）
     % 从0分隔符位置往前遍历seg_before（从末尾往前）
+    % 只寻找商家，检查已经遍历过的点是否只包含当前已遍历商家对应的客户点
     % 返回：新的0分隔符位置（在individual中的索引），如果无法移动返回-1
     
     if isempty(seg_before)
@@ -298,12 +282,10 @@ function new_zero_pos = traverse_forward(individual, idx0_extended, zero_idx, se
     seg_start = idx0_extended(zero_idx) + 1;
     seg_end = idx0_extended(zero_idx + 1) - 1;
     
-    % 从seg_before末尾往前遍历，找到完整的配对
-    % 记录已找到的商家和客户点
-    merchants_found = [];  % 记录找到的商家ID
-    merchants_pos = [];   % 记录找到的商家在seg_before中的位置
-    customers_found = []; % 记录找到的客户点ID
-    customers_pos = [];   % 记录找到的客户点在seg_before中的位置
+    % 从seg_before末尾往前遍历，只关注商家
+    % 记录已遍历过的商家和客户点
+    merchants_traversed = [];  % 记录已遍历过的商家ID
+    customers_traversed = []; % 记录已遍历过的客户点ID
     
     for i = length(seg_before):-1:1
         point_id = seg_before(i);
@@ -313,48 +295,37 @@ function new_zero_pos = traverse_forward(individual, idx0_extended, zero_idx, se
             merchant_id = point_id;
             customer_id = merchant_id + n;
             
-            % 检查这个商家对应的客户点是否已经找到（在当前位置之前）
-            customer_idx = find(customers_found == customer_id);
-            if ~isempty(customer_idx)
-                % 找到了一个完整的配对（商家在i，客户点在customers_pos(customer_idx)）
-                % 计算客户点在individual中的位置
-                customer_pos_in_individual = seg_start + customers_pos(customer_idx) - 1;
+            % 检查已经遍历过的点（从末尾到当前位置之后）是否只包含【当前+已遍历】商家对应的客户点
+            % 已遍历过的点：从i+1到length(seg_before)之间的点
+            if i < length(seg_before)
+                traversed_points = seg_before(i+1:end);
+                traversed_customers = traversed_points(traversed_points > n & traversed_points <= 2*n);
                 
-                % 检查是否可以移动：客户点之前不是0或不是头部
-                if customer_pos_in_individual > 1 && individual(customer_pos_in_individual - 1) ~= 0
-                    % 可以移动到客户点之前
-                    new_zero_pos = customer_pos_in_individual - 1;
-                    return;
+                % 当前已遍历过的商家 = 当前商家 + 之前遍历到的商家
+                expected_customers = [merchants_traversed, merchant_id] + n;
+                
+                % 检查已遍历的客户点是否只包含这些商家对应的客户点
+                if isempty(traversed_customers) || all(ismember(traversed_customers, expected_customers))
+                    % 满足条件：可以在这个商家之前插入0
+                    % 计算商家在individual中的位置
+                    merchant_pos_in_individual = seg_start + i - 1;
+                    
+                    % 检查是否可以移动：商家之前不是0且不是头部
+                    if merchant_pos_in_individual > 1 && individual(merchant_pos_in_individual - 1) ~= 0
+                        % 可以移动到商家之前
+                        new_zero_pos = merchant_pos_in_individual - 1;
+                        return;
+                    end
                 end
-            else
-                % 客户点还没找到，记录这个商家
-                merchants_found = [merchant_id, merchants_found];
-                merchants_pos = [i, merchants_pos];
             end
+            
+            % 记录这个商家
+            merchants_traversed = [merchants_traversed, merchant_id];
             
         elseif point_id > n && point_id <= 2*n
-            % 找到客户点
+            % 找到客户点，只记录，不处理
             customer_id = point_id;
-            merchant_id = customer_id - n;
-            
-            % 检查这个客户点对应的商家是否已经找到（在当前位置之前）
-            merchant_idx = find(merchants_found == merchant_id);
-            if ~isempty(merchant_idx)
-                % 找到了一个完整的配对（商家在merchants_pos(merchant_idx)，客户点在i）
-                % 计算客户点在individual中的位置
-                customer_pos_in_individual = seg_start + i - 1;
-                
-                % 检查是否可以移动：客户点之前不是0或不是头部
-                if customer_pos_in_individual > 1 && individual(customer_pos_in_individual - 1) ~= 0
-                    % 可以移动到客户点之前
-                    new_zero_pos = customer_pos_in_individual - 1;
-                    return;
-                end
-            else
-                % 商家还没找到，记录这个客户点
-                customers_found = [customer_id, customers_found];
-                customers_pos = [i, customers_pos];
-            end
+            customers_traversed = [customers_traversed, customer_id];
         end
     end
     
@@ -365,9 +336,7 @@ end
 function new_zero_pos = traverse_backward(individual, idx0_extended, zero_idx, seg_after, n)
     % 往后遍历（向seg_after方向）
     % 从0分隔符位置往后遍历seg_after（从开头往后）
-    % 逻辑：先遇到客户点，然后往后检查商家的位置
-    % 从当前到商家的位置之间遍历过的点，如果没有缺失配对，就可以移动
-    % 找到第一个完整配对后，检查商家点之后是否可以移动（不是0且不是尾部）
+    % 只寻找客户点，检查已经遍历过的点是否只包含当前已遍历客户点对应的商家
     % 返回：新的0分隔符位置（在individual中的索引），如果无法移动返回-1
     
     if isempty(seg_after)
@@ -379,77 +348,51 @@ function new_zero_pos = traverse_backward(individual, idx0_extended, zero_idx, s
     seg_start = idx0_extended(zero_idx + 1) + 1;
     seg_end = idx0_extended(zero_idx + 2) - 1;
     
-    % 从seg_after开头往后遍历，找到完整的配对
-    % 记录已找到的商家和客户点
-    merchants_found = [];  % 记录找到的商家ID
-    merchants_pos = [];   % 记录找到的商家在seg_after中的位置
-    customers_found = []; % 记录找到的客户点ID
-    customers_pos = [];   % 记录找到的客户点在seg_after中的位置
+    % 从seg_after开头往后遍历，只关注客户点
+    % 记录已遍历过的商家和客户点
+    merchants_traversed = [];  % 记录已遍历过的商家ID
+    customers_traversed = []; % 记录已遍历过的客户点ID
     
     for i = 1:length(seg_after)
         point_id = seg_after(i);
         
-        if point_id >= 1 && point_id <= n
-            % 找到商家
-            merchant_id = point_id;
-            customer_id = merchant_id + n;
-            
-            % 检查这个商家对应的客户点是否已经找到（在当前位置之前）
-            customer_idx = find(customers_found == customer_id);
-            if ~isempty(customer_idx)
-                % 找到了一个完整的配对（商家在i，客户点在customers_pos(customer_idx)）
-                % 检查从客户点到商家点之间的点是否都是完整的配对
-                customer_pos_in_seg = customers_pos(customer_idx);
-                segment_between = seg_after(customer_pos_in_seg:i);
-                if is_complete_pairs_segment(segment_between, n)
-                    % 计算商家点在individual中的位置
-                    merchant_pos_in_individual = seg_start + i - 1;
-                    
-                    % 检查是否可以移动：商家点之后不是0且不是尾部
-                    if merchant_pos_in_individual < length(individual) && ...
-                       individual(merchant_pos_in_individual + 1) ~= 0
-                        % 可以移动到商家点之后
-                        new_zero_pos = merchant_pos_in_individual;
-                        return;
-                    end
-                end
-            else
-                % 客户点还没找到，记录这个商家
-                merchants_found = [merchant_id, merchants_found];
-                merchants_pos = [i, merchants_pos];
-            end
-            
-        elseif point_id > n && point_id <= 2*n
+        if point_id > n && point_id <= 2*n
             % 找到客户点
             customer_id = point_id;
             merchant_id = customer_id - n;
             
-            % 检查这个客户点对应的商家是否在后面
-            merchant_idx_in_seg = find(seg_after == merchant_id);
-            merchant_idx_in_seg = merchant_idx_in_seg(merchant_idx_in_seg > i);
-            
-            if ~isempty(merchant_idx_in_seg)
-                % 找到了一个完整的配对（客户点在i，商家在merchant_idx_in_seg(1)）
-                % 计算商家点在individual中的位置
-                merchant_pos_in_individual = seg_start + merchant_idx_in_seg(1) - 1;
+            % 检查已经遍历过的点（从开头到当前位置之前）是否只包含【当前+已遍历】客户点对应的商家
+            % 已遍历过的点：从1到i-1之间的点
+            if i > 1
+                traversed_points = seg_after(1:i-1);
+                traversed_merchants = traversed_points(traversed_points >= 1 & traversed_points <= n);
                 
-                % 检查从客户点到商家点之间的点是否都是完整的配对
-                % 简化：如果客户点和商家点之间没有其他点，或者都是完整的配对，可以移动
-                segment_between = seg_after(i:merchant_idx_in_seg(1));
-                if is_complete_pairs_segment(segment_between, n)
-                    % 检查是否可以移动：商家点之后不是0且不是尾部
-                    if merchant_pos_in_individual < length(individual) && ...
-                       individual(merchant_pos_in_individual + 1) ~= 0
-                        % 可以移动到商家点之后
-                        new_zero_pos = merchant_pos_in_individual;
+                % 当前已遍历过的客户点 = 当前客户点 + 之前遍历到的客户点
+                expected_merchants = [customers_traversed, customer_id] - n;
+                
+                % 检查已遍历的商家是否只包含这些客户点对应的商家
+                if isempty(traversed_merchants) || all(ismember(traversed_merchants, expected_merchants))
+                    % 满足条件：可以在这个客户点之后插入0
+                    % 计算客户点在individual中的位置
+                    customer_pos_in_individual = seg_start + i - 1;
+                    
+                    % 检查是否可以移动：客户点之后不是0且不是尾部
+                    if customer_pos_in_individual < length(individual) && ...
+                       individual(customer_pos_in_individual + 1) ~= 0
+                        % 可以移动到客户点之后
+                        new_zero_pos = customer_pos_in_individual;
                         return;
                     end
                 end
-            else
-                % 商家还没找到，记录这个客户点
-                customers_found = [customer_id, customers_found];
-                customers_pos = [i, customers_pos];
             end
+            
+            % 记录这个客户点
+            customers_traversed = [customers_traversed, customer_id];
+            
+        elseif point_id >= 1 && point_id <= n
+            % 找到商家，只记录，不处理
+            merchant_id = point_id;
+            merchants_traversed = [merchants_traversed, merchant_id];
         end
     end
     
