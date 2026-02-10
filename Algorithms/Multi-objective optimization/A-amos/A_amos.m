@@ -42,10 +42,75 @@ classdef A_amos < ALGORITHM
            clustName = (1:popSize)';
            centroid = objVals;  % 聚类中心在目标空间
            
-           %% 主优化循环
+           %% 局部最优避免机制：停滞检测与自适应参数
+           bestObjHistory = [];  % 记录历史最优目标值
+           stagnationCounter = 0;  % 停滞计数器
+           stagnationThreshold = 20;  % 停滞阈值（连续20代无改进）
+           adaptivePm = pm;  % 自适应变异概率
+           adaptivePc = pc;  % 自适应交叉概率
+           restartInterval = 50;  % 重启间隔（每50代检查一次）
+           diversityHistory = [];  % 多样性历史
+           
+               %% 主优化循环
            gen = 0;
            while Algorithm.NotTerminated(Population)
                gen = gen + 1;
+               
+               %% 停滞检测与自适应参数调整
+               if ~isempty(objVals) && size(objVals, 1) > 0
+                   % 计算当前最优（超体积或Pareto前沿大小）
+                   validObj = objVals(objVals(:,1) < 1e9, :);
+                   if ~isempty(validObj)
+                       currentBest = min(validObj(:,1));  % 或使用超体积指标
+                       bestObjHistory = [bestObjHistory, currentBest];
+                       
+                       % 计算多样性（目标空间的分散度）
+                       if size(validObj, 1) > 1
+                           diversity = mean(std(validObj, 0, 1)) / (mean(mean(validObj)) + 1e-10);
+                           diversityHistory = [diversityHistory, diversity];
+                       end
+                       
+                       % 检测停滞：最近stagnationThreshold代无显著改进
+                       if length(bestObjHistory) > stagnationThreshold
+                           recentBest = bestObjHistory(end-stagnationThreshold+1:end);
+                           improvement = (recentBest(1) - recentBest(end)) / (abs(recentBest(1)) + 1e-10);
+                           if improvement < 0.01  % 改进小于1%
+                               stagnationCounter = stagnationCounter + 1;
+                               % 自适应增加变异率和探索性
+                               adaptivePm = min(0.8, pm * (1 + stagnationCounter * 0.1));
+                               adaptivePc = max(0.5, pc * (1 - stagnationCounter * 0.05));
+                           else
+                               stagnationCounter = max(0, stagnationCounter - 1);
+                               adaptivePm = pm;
+                               adaptivePc = pc;
+                           end
+                       end
+                       
+                       % 多样性过低时增加探索
+                       if length(diversityHistory) > 10
+                           recentDiversity = mean(diversityHistory(end-9:end));
+                           if recentDiversity < 0.01
+                               adaptivePm = min(0.8, adaptivePm * 1.2);
+                               adaptivePc = max(0.5, adaptivePc * 0.9);
+                           end
+                       end
+                   end
+               end
+               
+               %% 随机重启机制（每restartInterval代检查）
+               if mod(gen, restartInterval) == 0 && stagnationCounter > 5
+                   % 替换10%的最差解为随机新解
+                   if ~isempty(objVals) && size(objVals, 1) > 0
+                       numReplace = max(1, floor(popSize * 0.1));
+                       [~, worstIdx] = sort(objVals(:,1), 'descend');
+                       replaceIdx = worstIdx(1:numReplace);
+                       newPop = Problem.Initialization(numReplace);
+                       pop(replaceIdx, :) = newPop.decs;
+                       objVals(replaceIdx, :) = newPop.objs;
+                       fprintf('代 %d: 随机重启，替换 %d 个最差解\n', gen, numReplace);
+                       stagnationCounter = 0;  % 重置停滞计数器
+                   end
+               end
                
                %% 目标空间聚类管理
                auxPop = [];
@@ -136,9 +201,53 @@ classdef A_amos < ALGORITHM
                        parent = currentSol;
                    end
                    
-                   %% 对选中的父代应用变异操作生成子代
-                   % 始终应用变异操作，确保生成新的子代
-                   trialSol = OrderPreservingMutation(parent, m, varDim, n);
+                   %% 对选中的父代应用交叉和变异操作生成子代
+                   % 使用自适应概率
+                   useCrossover = rand < adaptivePc;
+                   useMutation = rand < adaptivePm;
+                   
+                   % 首先应用交叉操作
+                   if useCrossover && globalSize >= 1
+                       % 扩大父代池：以概率从全种群选 parent2，避免只用 globalClust 导致基因库过小
+                       if rand < 0.5 && popSize > 1
+                           idx2 = randi(popSize);
+                           parent2 = pop(idx2, :);
+                       else
+                           idx2 = randsample(globalSize, 1);
+                           parent2 = globalClust(idx2, :);
+                       end
+                       
+                       % 三种交叉之一：位置追踪 / 对优先级 / 顺序保持（内部随机选择）
+                       trialSol = SegmentBasedCrossover(parent, parent2, n, m, varDim);
+                       
+                       if length(trialSol) ~= varDim
+                           trialSol = [trialSol, zeros(1, max(0, varDim - length(trialSol)))];
+                           trialSol = trialSol(1:varDim);
+                       end
+                   else
+                       % 直接应用变异操作
+                       trialSol = OrderPreservingMutation(parent, m, varDim, n);
+                   end
+                   
+                   % 额外探索性操作：当停滞时增加随机扰动
+                   if stagnationCounter > 3 && rand < 0.3
+                       % 随机交换两个段的内容（增加探索性）
+                       idx0 = find(trialSol == 0);
+                       if length(idx0) >= 2
+                           segIdx = randperm(length(idx0)+1, 2);
+                           idx0_exp = [0, idx0, length(trialSol)+1];
+                           seg1_start = idx0_exp(segIdx(1)) + 1;
+                           seg1_end = idx0_exp(segIdx(1)+1) - 1;
+                           seg2_start = idx0_exp(segIdx(2)) + 1;
+                           seg2_end = idx0_exp(segIdx(2)+1) - 1;
+                           if seg1_end >= seg1_start && seg2_end >= seg2_start
+                               seg1 = trialSol(seg1_start:seg1_end);
+                               seg2 = trialSol(seg2_start:seg2_end);
+                               trialSol(seg1_start:seg1_end) = seg2;
+                               trialSol(seg2_start:seg2_end) = seg1;
+                           end
+                       end
+                   end
                    
                    % 确保是行向量
                    if size(trialSol, 1) ~= 1

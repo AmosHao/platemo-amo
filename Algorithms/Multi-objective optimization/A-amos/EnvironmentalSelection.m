@@ -257,6 +257,25 @@ function [pop, objVals, clustTag, clustName, centroid, Population] = ...
         clustTag = auxTag;
     end
     
+    % 决策空间多样性维护：去除重复个体，用批量随机新解替换（一次初始化，保证速度）
+    [~, ia, ~] = unique(pop, 'rows');
+    duplicateIndices = setdiff(1:size(pop, 1), ia);
+    if ~isempty(duplicateIndices)
+        numReplace = length(duplicateIndices);
+        newPop = Problem.Initialization(numReplace);
+        pop(duplicateIndices, :) = newPop.decs;
+        objVals(duplicateIndices, :) = newPop.objs;
+        clustTag(duplicateIndices) = inf;
+        % 用 newPop 中已有解直接填 auxAll，避免逐次 Evaluation 拖慢迭代
+        if numReplace == 1
+            auxAll(duplicateIndices(1)) = newPop(1);
+        else
+            for j = 1:numReplace
+                auxAll(duplicateIndices(j)) = newPop(j);
+            end
+        end
+    end
+    
     % 更新聚类信息（目标空间聚类）
     % 先为未分类的解分配聚类
     unclassified = find(clustTag == inf);
