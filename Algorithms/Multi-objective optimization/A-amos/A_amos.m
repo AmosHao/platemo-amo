@@ -243,8 +243,11 @@ classdef A_amos < ALGORITHM
                            if seg1_end >= seg1_start && seg2_end >= seg2_start
                                seg1 = trialSol(seg1_start:seg1_end);
                                seg2 = trialSol(seg2_start:seg2_end);
-                               trialSol(seg1_start:seg1_end) = seg2;
-                               trialSol(seg2_start:seg2_end) = seg1;
+                               % 只交换长度相同的段，避免"左侧和右侧的元素数目不同"错误
+                               if length(seg1) == length(seg2)
+                                   trialSol(seg1_start:seg1_end) = seg2;
+                                   trialSol(seg2_start:seg2_end) = seg1;
+                               end
                            end
                        end
                    end
