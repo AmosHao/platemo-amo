@@ -25,7 +25,8 @@ function [pop, objVals, clustTag, clustName, centroid, Population] = ...
 %   centroid - 更新后的聚类中心
 %   Population - 选择后的Population对象
 
-    % 合并父代和子代
+    % 合并父代和子代（统一评估，保证每代只调用一次Evaluation，且次数=2*popSize的倍数）
+    % 为了HV平稳性：每代只调用一次Evaluation，评估父代+子代（2*popSize个解）
     if isempty(pop)
         popAll = auxPop;
     elseif isempty(auxPop)
@@ -36,7 +37,6 @@ function [pop, objVals, clustTag, clustName, centroid, Population] = ...
     
     % 确保popAll不为空
     if isempty(popAll)
-        % 如果都为空，返回空结果
         pop = [];
         objVals = [];
         clustTag = [];
@@ -46,9 +46,21 @@ function [pop, objVals, clustTag, clustName, centroid, Population] = ...
         return;
     end
     
-    % 评估所有解
+    % 统一评估所有解（父代+子代），保证每代只调用一次Evaluation
+    % 这样FE消耗 = 2*popSize 每代（与原来相同），但HV计算更平稳
     allVals = Problem.Evaluation(popAll);
     objValsAll = allVals.objs;
+    
+    % 确保popAll不为空
+    if isempty(popAll)
+        pop = [];
+        objVals = [];
+        clustTag = [];
+        clustName = [];
+        centroid = [];
+        Population = [];
+        return;
+    end
     
     % 清理目标值，确保是实数
     objValsAll = real(objValsAll);
@@ -56,34 +68,34 @@ function [pop, objVals, clustTag, clustName, centroid, Population] = ...
     objValsAll(isinf(objValsAll)) = 1e10;  % Inf替换为大数
     
     % 调试：检查f1值的唯一性（每10代输出一次）
-    persistent debugGen;
-    if isempty(debugGen)
-        debugGen = 0;
-    end
-    debugGen = debugGen + 1;
-    if mod(debugGen, 10) == 1 && size(objValsAll, 1) > 0
-        % 排除无效解（1e10）后统计
-        validIdx = objValsAll(:, 1) < 1e9;  % 排除无效解
-        validF1 = objValsAll(validIdx, 1);
-        invalidCount = sum(~validIdx);
-        
-        if ~isempty(validF1)
-            uniqueF1 = unique(round(validF1, 6));  % 保留6位小数
-            fprintf('调试 [代 %d]: 总解数=%d, 有效解=%d, 无效解=%d, 唯一f1值数=%d, f1范围=[%.2f, %.2f], f1标准差=%.6f\n', ...
-                debugGen, size(objValsAll, 1), length(validF1), invalidCount, length(uniqueF1), ...
-                min(validF1), max(validF1), std(validF1));
-            if length(uniqueF1) < length(validF1) * 0.5
-                fprintf('警告: f1值多样性不足！只有%.1f%%的有效解有唯一的f1值\n', ...
-                    100 * length(uniqueF1) / length(validF1));
-            end
-            if invalidCount > size(objValsAll, 1) * 0.1
-                fprintf('警告: 无效解过多！%.1f%%的解是无效的（目标值=1e10）\n', ...
-                    100 * invalidCount / size(objValsAll, 1));
-            end
-        else
-            fprintf('调试 [代 %d]: 所有解都无效！\n', debugGen);
-        end
-    end
+    % persistent debugGen;
+    % if isempty(debugGen)
+    %     debugGen = 0;
+    % end
+    % debugGen = debugGen + 1;
+    % if mod(debugGen, 10) == 1 && size(objValsAll, 1) > 0
+    %     % 排除无效解（1e10）后统计
+    %     validIdx = objValsAll(:, 1) < 1e9;  % 排除无效解
+    %     validF1 = objValsAll(validIdx, 1);
+    %     invalidCount = sum(~validIdx);
+    % 
+    %     if ~isempty(validF1)
+    %         uniqueF1 = unique(round(validF1, 6));  % 保留6位小数
+    %         fprintf('调试 [代 %d]: 总解数=%d, 有效解=%d, 无效解=%d, 唯一f1值数=%d, f1范围=[%.2f, %.2f], f1标准差=%.6f\n', ...
+    %             debugGen, size(objValsAll, 1), length(validF1), invalidCount, length(uniqueF1), ...
+    %             min(validF1), max(validF1), std(validF1));
+    %         if length(uniqueF1) < length(validF1) * 0.5
+    %             fprintf('警告: f1值多样性不足！只有%.1f%%的有效解有唯一的f1值\n', ...
+    %                 100 * length(uniqueF1) / length(validF1));
+    %         end
+    %         if invalidCount > size(objValsAll, 1) * 0.1
+    %             fprintf('警告: 无效解过多！%.1f%%的解是无效的（目标值=1e10）\n', ...
+    %                 100 * invalidCount / size(objValsAll, 1));
+    %         end
+    %     else
+    %         fprintf('调试 [代 %d]: 所有解都无效！\n', debugGen);
+    %     end
+    % end
     
     % 更新聚类标签（新解标记为inf）
     tmpSize = size(auxPop, 1);
@@ -92,16 +104,19 @@ function [pop, objVals, clustTag, clustName, centroid, Population] = ...
     % 非支配排序
     [FrontNo, ~] = NDSort(objValsAll, inf);
     
-    % 构建参考点（改进：使用更合理的参考点，避免过度惩罚）
-    % 使用非支配前沿的最大值，而不是所有解的最大值
+    % 构建参考点（稳定策略：使用更保守的参考点，减少HV计算波动）
     front1Indices = find(FrontNo == 1);
     if ~isempty(front1Indices)
         front1Max = max(objValsAll(front1Indices, :), [], 1);
-        % 参考点：使用第一层的最大值，但不要太小，避免左下角解一直被保留
-        refPoint = 1.15 * front1Max;  % 稍微扩大，确保有足够的淘汰空间
+        front1Min = min(objValsAll(front1Indices, :), [], 1);
+        % 使用最大值和最小值的加权平均，使参考点更稳定
+        stableMax = 0.7 * front1Max + 0.3 * front1Min;
+        refPoint = 1.15 * stableMax;
     else
-        refPoint = max(objValsAll, [], 1);
-        refPoint = 1.2 * refPoint;
+        allMax = max(objValsAll, [], 1);
+        allMin = min(objValsAll, [], 1);
+        stableMax = 0.7 * allMax + 0.3 * allMin;
+        refPoint = 1.2 * stableMax;
     end
     
     % 按非支配层选择
@@ -257,16 +272,16 @@ function [pop, objVals, clustTag, clustName, centroid, Population] = ...
         clustTag = auxTag;
     end
     
-    % 决策空间多样性维护：去除重复个体，用批量随机新解替换（一次初始化，保证速度）
+    % 决策空间多样性维护：一次性替换所有重复（恢复有效性，打破局部最优）
     [~, ia, ~] = unique(pop, 'rows');
     duplicateIndices = setdiff(1:size(pop, 1), ia);
     if ~isempty(duplicateIndices)
         numReplace = length(duplicateIndices);
+        % 批量生成随机新解替换（保持速度，打破局部最优）
         newPop = Problem.Initialization(numReplace);
         pop(duplicateIndices, :) = newPop.decs;
         objVals(duplicateIndices, :) = newPop.objs;
         clustTag(duplicateIndices) = inf;
-        % 用 newPop 中已有解直接填 auxAll，避免逐次 Evaluation 拖慢迭代
         if numReplace == 1
             auxAll(duplicateIndices(1)) = newPop(1);
         else

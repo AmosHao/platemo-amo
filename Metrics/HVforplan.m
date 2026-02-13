@@ -21,20 +21,13 @@ function score = HV(Population,optimum)
         score = nan;
     else
         [N,M]  = size(PopObj);
-        
-        % 使用固定的归一化参数：fmin设为理想点[0,0,...]，保证完全稳定
-        % 这样可以保证HV值在不同代之间完全可比，符合HV理论要求
-        % 使用固定fmin而不是动态计算，避免归一化空间的变化导致HV波动
-        fmin = zeros(1, M);  % 固定为理想点，保证归一化参数完全稳定
-        
+        fmin   = min(min(PopObj,[],1),zeros(1,M));
         %fmax   = max(optimum,[],1);
         %fmax = max(PopObj,[],1);
         % fmax   = max(max(PopObj,[],1),zeros(1,M));
-        % 根据实际目标值范围调整：f1≈10^6 J（总能量），f2≈10^4 s（总时间）
-        % 设置为实际值的2-3倍，留有余量
-        fmax=[3*10^6, 1*10^5];  % [总能量上限, 总时间上限]
+        % fmax=[5*10^9,5*10^7];
         % fmax=[5000000,5000000,5000000];
-        % fmax=[50,50,50];
+        fmax=[50,50,50];
         % fmax=[5000,5000,5000];
         PopObj = (PopObj-repmat(fmin,N,1))./repmat((fmax-fmin)*1.1,N,1);
         PopObj(any(PopObj>1,2),:) = [];

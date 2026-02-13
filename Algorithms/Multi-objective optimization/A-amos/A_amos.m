@@ -76,9 +76,9 @@ classdef A_amos < ALGORITHM
                            improvement = (recentBest(1) - recentBest(end)) / (abs(recentBest(1)) + 1e-10);
                            if improvement < 0.01  % 改进小于1%
                                stagnationCounter = stagnationCounter + 1;
-                               % 自适应增加变异率和探索性
-                               adaptivePm = min(0.8, pm * (1 + stagnationCounter * 0.1));
-                               adaptivePc = max(0.5, pc * (1 - stagnationCounter * 0.05));
+                               % 自适应增加变异率和探索性（更激进，避免局部最优）
+                               adaptivePm = min(0.9, pm * (1 + stagnationCounter * 0.15));  % 最高0.9
+                               adaptivePc = max(0.4, pc * (1 - stagnationCounter * 0.08));  % 最低0.4
                            else
                                stagnationCounter = max(0, stagnationCounter - 1);
                                adaptivePm = pm;
@@ -97,20 +97,22 @@ classdef A_amos < ALGORITHM
                    end
                end
                
-               %% 随机重启机制（每restartInterval代检查）
-               if mod(gen, restartInterval) == 0 && stagnationCounter > 5
-                   % 替换10%的最差解为随机新解
-                   if ~isempty(objVals) && size(objVals, 1) > 0
-                       numReplace = max(1, floor(popSize * 0.1));
-                       [~, worstIdx] = sort(objVals(:,1), 'descend');
-                       replaceIdx = worstIdx(1:numReplace);
-                       newPop = Problem.Initialization(numReplace);
-                       pop(replaceIdx, :) = newPop.decs;
-                       objVals(replaceIdx, :) = newPop.objs;
-                       fprintf('代 %d: 随机重启，替换 %d 个最差解\n', gen, numReplace);
-                       stagnationCounter = 0;  % 重置停滞计数器
-                   end
-               end
+               %% 随机重启机制（恢复有效性：一次性替换10%，打破局部最优）
+               % 注意：重启时的新解会通过Initialization评估，但这是必要的
+               % 主循环中只评估auxPop（子代），保证每代只调用一次Evaluation（在EnvironmentalSelection中）
+               % if mod(gen, restartInterval) == 0 && stagnationCounter > 5
+               %     % 替换10%的最差解为随机新解（批量，保持速度）
+               %     if ~isempty(objVals) && size(objVals, 1) > 0
+               %         numReplace = max(1, floor(popSize * 0.1));
+               %         [~, worstIdx] = sort(objVals(:,1), 'descend');
+               %         replaceIdx = worstIdx(1:numReplace);
+               %         newPop = Problem.Initialization(numReplace);
+               %         pop(replaceIdx, :) = newPop.decs;
+               %         objVals(replaceIdx, :) = newPop.objs;
+               %         fprintf('代 %d: 随机重启，替换 %d 个最差解（已评估）\n', gen, numReplace);
+               %         stagnationCounter = 0;  % 重置停滞计数器
+               %     end
+               % end
                
                %% 目标空间聚类管理
                auxPop = [];
@@ -183,9 +185,14 @@ classdef A_amos < ALGORITHM
                    end
                    neigSize = size(neighborhood, 1);
                    
-                   %% 父代选择策略：以概率选择从全局还是当前解的聚类中选择一个个体
-                   % 聚类的作用：选择同聚类的个体进行局部搜索，或选择全局个体进行探索
-                   localSearchProb = BETA * gen / maxgen;  % 局部搜索概率（随代数增加）
+                   %% 父代选择策略：自适应平衡局部/全局搜索，避免局部最优
+                   % 当停滞时降低局部搜索概率，增加全局探索
+                   if stagnationCounter > 3
+                       adjustedBeta = BETA * 0.5;  % 停滞时降低局部搜索倾向
+                   else
+                       adjustedBeta = BETA;
+                   end
+                   localSearchProb = adjustedBeta * gen / maxgen;  % 局部搜索概率（随代数增加）
                    
                    % 以概率选择从当前解的聚类还是全局选择
                    if rand < localSearchProb && neigSize >= 1
@@ -229,9 +236,9 @@ classdef A_amos < ALGORITHM
                        trialSol = OrderPreservingMutation(parent, m, varDim, n);
                    end
                    
-                   % 额外探索性操作：当停滞时增加随机扰动
-                   if stagnationCounter > 3 && rand < 0.3
-                       % 随机交换两个段的内容（增加探索性）
+                   % 增强探索性操作：避免局部最优
+                   % 1. 当停滞时增加随机扰动（段交换）- 仅当两段均为完整对（偶数长度）时交换，避免产生 "0 0 18"
+                   if stagnationCounter > 2 && rand < 0.4
                        idx0 = find(trialSol == 0);
                        if length(idx0) >= 2
                            segIdx = randperm(length(idx0)+1, 2);
@@ -243,14 +250,22 @@ classdef A_amos < ALGORITHM
                            if seg1_end >= seg1_start && seg2_end >= seg2_start
                                seg1 = trialSol(seg1_start:seg1_end);
                                seg2 = trialSol(seg2_start:seg2_end);
-                               % 只交换长度相同的段，避免"左侧和右侧的元素数目不同"错误
-                               if length(seg1) == length(seg2)
+                               % 仅当两段长度相等且均为偶数（完整商家-客户对）时交换
+                               L1 = length(seg1); L2 = length(seg2);
+                               if L1 == L2 && mod(L1, 2) == 0
                                    trialSol(seg1_start:seg1_end) = seg2;
                                    trialSol(seg2_start:seg2_end) = seg1;
                                end
                            end
                        end
                    end
+                   % 2. 定期（每10代）对所有个体增加一次额外变异，打破局部最优
+                   if mod(gen, 10) == 0 && rand < 0.2
+                       trialSol = OrderPreservingMutation(trialSol, m, varDim, n);
+                   end
+                   
+                   % 统一段结构修复：确保每段均为完整商家-客户对（可两 0 相邻，但左右段必须完整）
+                   trialSol = OrderSegmentRepair(trialSol, n, m, varDim);
                    
                    % 确保是行向量
                    if size(trialSol, 1) ~= 1

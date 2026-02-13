@@ -187,11 +187,11 @@ classdef planner_order_v3 < PROBLEM
         s_solidity = b_blades * c_chord * R_rotor / (pi * R_rotor^2);  % 桨盘实度
         P_0 = (delta_drag / 8) * rho_air * s_solidity * A_rotor * Omega^3 * R_rotor^3;  % 型阻功率常数
         % 引入数据文件（包含坐标、障碍物、惩罚系数等）
-        % 数据文件路径：从当前文件位置到forOrderNew26文件夹
+        % 数据文件路径：从当前文件位置到 forOrderNew26/Order_Map/order_data.m
         current_file_dir = fileparts(mfilename('fullpath'));
         % 从 PlatEMO/Problems/Multi-objective optimization/Amos/ 到 PlatEMO/ 目录
         platemo_root = fileparts(fileparts(fileparts(current_file_dir)));
-        data_file_path = fullfile(platemo_root, 'forOrderNew26', 'order_data.m');
+        data_file_path = fullfile(platemo_root, 'forOrderNew26', 'Order_Map', 'order_data.m');
         
         if exist(data_file_path, 'file')
             run(data_file_path);
@@ -622,34 +622,18 @@ classdef planner_order_v3 < PROBLEM
             end
         end
         
-        % 目标一：总能耗（增加区分度）
+        % 目标一：总能耗（移除区分度项，直接使用总和）
         % 确保 E_all 和 T_all 都是实数
         E_all = real(E_all);
         T_all = real(T_all);
         
         baseE_sum = real(sum(E_all));
-        if length(E_all) > 1
-            % 添加区分度项：标准差、范围、平方和
-            stdE = real(std(E_all));
-            rangeE = real(range(E_all));
-            PopObj(j,1) = baseE_sum + 0.5 * max(0, stdE) + 0.05 * max(0, rangeE) + ...
-                0.01 * real(sum(E_all.^2)) / length(E_all);
-        else
-            PopObj(j,1) = baseE_sum;
-        end
+        PopObj(j,1) = baseE_sum;
         PopObj(j,1) = real(PopObj(j,1));
         
-        % 目标二：总时间（增加区分度）
+        % 目标二：总时间（移除区分度项，直接使用总和）
         baseT_sum = real(sum(T_all));
-        if length(T_all) > 1
-            % 添加区分度项：标准差、范围、平方和
-            stdT = real(std(T_all));
-            rangeT = real(range(T_all));
-            PopObj(j,2) = baseT_sum + 0.5 * max(0, stdT) + 0.05 * max(0, rangeT) + ...
-                0.01 * real(sum(T_all.^2)) / length(T_all);
-        else
-            PopObj(j,2) = baseT_sum;
-        end
+        PopObj(j,2) = baseT_sum;
         PopObj(j,2) = real(PopObj(j,2)); 
          
         % 约束--载重
@@ -674,7 +658,7 @@ classdef planner_order_v3 < PROBLEM
         baseT = max(1, real(sum(T_all)));  % 避免除以0，确保是实数
         
         % 惩罚系数：根据目标值量级调整
-        penaltyCoeff = max(1, real(min(baseE, baseT)) / 10000);  % 从1000改为10000，降低惩罚强度，确保是实数
+        penaltyCoeff = max(1, real(min(baseE, baseT)) / 1000);  % 从1000改为10000，降低惩罚强度，确保是实数
         
         PopObj(j,1)=real(PopObj(j,1)+penaltyCoeff*(Penalty1+Penalty2)+Penalty3);  % 添加约束惩罚，确保是实数
         PopObj(j,2)=real(PopObj(j,2)+penaltyCoeff*(Penalty1+Penalty2)+Penalty3);  % 添加约束惩罚，确保是实数
@@ -727,52 +711,52 @@ classdef planner_order_v3 < PROBLEM
         end
         
         % 输出调试统计信息（每处理完所有解后输出一次）
-        if j == N
-            fprintf('\n========== 调试统计 [批次完成] ==========\n');
-            fprintf('总解数: %d\n', N);
-            fprintf('无效解总数: %d (%.1f%%)\n', debug_stats.total_invalid, 100*debug_stats.total_invalid/N);
-            fprintf('\n无效原因统计:\n');
-            fprintf('  - Inf/NaN: %d\n', debug_stats.invalid_reasons.inf_nan);
-            fprintf('  - 负数: %d\n', debug_stats.invalid_reasons.negative);
-            fprintf('  - 缺少必需的点: %d\n', debug_stats.invalid_reasons.missing_points);
-            fprintf('  - 0分隔符数量错误: %d\n', debug_stats.invalid_reasons.wrong_zeros);
-            fprintf('  - 空段: %d\n', debug_stats.invalid_reasons.empty_segments);
-            fprintf('  - 能量计算错误: %d\n', debug_stats.invalid_reasons.energy_error);
-            fprintf('  - 时间计算错误: %d\n', debug_stats.invalid_reasons.time_error);
-            
-            if ~isempty(debug_stats.invalid_examples)
-                fprintf('\n无效解示例（前%d个）:\n', min(3, length(debug_stats.invalid_examples)));
-                for ex_idx = 1:min(3, length(debug_stats.invalid_examples))
-                    ex = debug_stats.invalid_examples{ex_idx};
-                    fprintf('  示例%d - 类型: %s\n', ex_idx, ex.type);
-                    fprintf('    路径长度: %d, 路径前15个: [%s]\n', length(ex.route), ...
-                        num2str(ex.route(1:min(15, length(ex.route)))));
-                    if isfield(ex, 'missing')
-                        fprintf('    缺失的点: [%s]\n', num2str(ex.missing));
-                    end
-                    if isfield(ex, 'zeroCount')
-                        if isfield(ex, 'expected')
-                            fprintf('    0分隔符数量: %d (期望: %d)\n', ex.zeroCount, ex.expected);
-                        else
-                            fprintf('    0分隔符数量: %d (期望: %d)\n', ex.zeroCount, m-1);
-                        end
-                    end
-                    if isfield(ex, 'E_all')
-                        fprintf('    E_all: [%s]\n', num2str(ex.E_all));
-                    end
-                    if isfield(ex, 'T_all')
-                        fprintf('    T_all: [%s]\n', num2str(ex.T_all));
-                    end
-                    if isfield(ex, 'PopObj_before')
-                        fprintf('    原始目标值: f1=%.2f, f2=%.2f\n', ex.PopObj_before(1), ex.PopObj_before(2));
-                    end
-                    if isfield(ex, 'Penalty1')
-                        fprintf('    惩罚值: P1=%.2f, P2=%.2f, P3=%.2f\n', ex.Penalty1, ex.Penalty2, ex.Penalty3);
-                    end
-                end
-            end
-            fprintf('==========================================\n\n');
-        end
+        % if j == N
+        %     fprintf('\n========== 调试统计 [批次完成] ==========\n');
+        %     fprintf('总解数: %d\n', N);
+        %     fprintf('无效解总数: %d (%.1f%%)\n', debug_stats.total_invalid, 100*debug_stats.total_invalid/N);
+        %     fprintf('\n无效原因统计:\n');
+        %     fprintf('  - Inf/NaN: %d\n', debug_stats.invalid_reasons.inf_nan);
+        %     fprintf('  - 负数: %d\n', debug_stats.invalid_reasons.negative);
+        %     fprintf('  - 缺少必需的点: %d\n', debug_stats.invalid_reasons.missing_points);
+        %     fprintf('  - 0分隔符数量错误: %d\n', debug_stats.invalid_reasons.wrong_zeros);
+        %     fprintf('  - 空段: %d\n', debug_stats.invalid_reasons.empty_segments);
+        %     fprintf('  - 能量计算错误: %d\n', debug_stats.invalid_reasons.energy_error);
+        %     fprintf('  - 时间计算错误: %d\n', debug_stats.invalid_reasons.time_error);
+        % 
+        %     if ~isempty(debug_stats.invalid_examples)
+        %         fprintf('\n无效解示例（前%d个）:\n', min(3, length(debug_stats.invalid_examples)));
+        %         for ex_idx = 1:min(3, length(debug_stats.invalid_examples))
+        %             ex = debug_stats.invalid_examples{ex_idx};
+        %             fprintf('  示例%d - 类型: %s\n', ex_idx, ex.type);
+        %             fprintf('    路径长度: %d, 路径前15个: [%s]\n', length(ex.route), ...
+        %                 num2str(ex.route(1:min(15, length(ex.route)))));
+        %             if isfield(ex, 'missing')
+        %                 fprintf('    缺失的点: [%s]\n', num2str(ex.missing));
+        %             end
+        %             if isfield(ex, 'zeroCount')
+        %                 if isfield(ex, 'expected')
+        %                     fprintf('    0分隔符数量: %d (期望: %d)\n', ex.zeroCount, ex.expected);
+        %                 else
+        %                     fprintf('    0分隔符数量: %d (期望: %d)\n', ex.zeroCount, m-1);
+        %                 end
+        %             end
+        %             if isfield(ex, 'E_all')
+        %                 fprintf('    E_all: [%s]\n', num2str(ex.E_all));
+        %             end
+        %             if isfield(ex, 'T_all')
+        %                 fprintf('    T_all: [%s]\n', num2str(ex.T_all));
+        %             end
+        %             if isfield(ex, 'PopObj_before')
+        %                 fprintf('    原始目标值: f1=%.2f, f2=%.2f\n', ex.PopObj_before(1), ex.PopObj_before(2));
+        %             end
+        %             if isfield(ex, 'Penalty1')
+        %                 fprintf('    惩罚值: P1=%.2f, P2=%.2f, P3=%.2f\n', ex.Penalty1, ex.Penalty2, ex.Penalty3);
+        %             end
+        %         end
+        %     end
+        %     fprintf('==========================================\n\n');
+        % end
         
     else
 

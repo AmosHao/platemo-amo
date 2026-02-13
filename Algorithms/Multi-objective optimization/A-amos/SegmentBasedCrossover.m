@@ -351,6 +351,7 @@ end
 
 function repaired = SegmentBasedCrossover_repairSegmentSizes(seq, m)
 % 辅助函数：确保每个 0 分隔的段至少 2 个基因（至少一对商家-客户），避免出现 "0 18" 这种末段只有一点
+% 允许两个 0 相邻，但每一段（0 的左右）必须是完整的商家-客户对（偶数长度）
     pos0 = find(seq == 0);
     if isempty(pos0) || length(pos0) ~= m - 1
         repaired = seq;
@@ -363,36 +364,63 @@ function repaired = SegmentBasedCrossover_repairSegmentSizes(seq, m)
     iter = 0;
     while any(segLen < 2) && iter < maxIter
         iter = iter + 1;
+        % 若存在相邻的两个 0，与邻居交换无效（交换两 0 不变），须将其中一个 0 移到合法位置
+        consecutiveZeros = find(diff(pos0) == 1);
+        if ~isempty(consecutiveZeros)
+            % 从第一对相邻 0 中移除后一个 0，插入到“某对完整点之后”的位置，使两侧段长均为偶数
+            removePos = pos0(consecutiveZeros(1) + 1);
+            seqShort = [seq(1:removePos-1), seq(removePos+1:end)];
+            nonZeroIdx = find(seqShort ~= 0);
+            inserted = false;
+            for k = 1:floor((length(nonZeroIdx)-1)/2)
+                afterPos = nonZeroIdx(2*k);
+                % 只在两个非零相邻处插入，避免产生新的相邻 0
+                if afterPos < length(seqShort) && (afterPos+1) == nonZeroIdx(2*k+1)
+                    seq = [seqShort(1:afterPos), 0, seqShort(afterPos+1:end)];
+                    inserted = true;
+                    break;
+                end
+            end
+            if ~inserted
+                % 若无合适空隙，在第二与第三非零之间插入（保证左段至少 2）
+                if length(nonZeroIdx) >= 3
+                    afterPos = nonZeroIdx(2);
+                    seq = [seqShort(1:afterPos), 0, seqShort(afterPos+1:end)];
+                else
+                    seq = seqShort;
+                    seq = [seq(1:min(2,end)), 0, seq(min(2,end)+1:end)];
+                end
+                if length(seq) > L
+                    seq = seq(1:L);
+                end
+            end
+            pos0 = find(seq == 0);
+            segLen = [pos0(1)-1, pos0(2:end)-pos0(1:end-1)-1, L - pos0(end)];
+            continue;
+        end
         if segLen(1) < 2
-            % 第一段太短：把第一个 0 向右移（与右边基因交换）
+            % 第一段太短：把第一个 0 向右移（与右边基因交换，且右边不能是 0）
             p = pos0(1);
-            if p < L
+            if p < L && seq(p+1) ~= 0
                 seq([p, p+1]) = seq([p+1, p]);
             end
         elseif segLen(m) < 2
-            % 最后一段太短：把最后一个 0 向左移（与左边基因交换）
+            % 最后一段太短：把最后一个 0 向左移（与左边基因交换，且左边不能是 0）
             p = pos0(end);
-            if p > 1
+            if p > 1 && seq(p-1) ~= 0
                 seq([p-1, p]) = seq([p, p-1]);
             end
         else
             % 中间某段太短
             k = find(segLen < 2, 1);
-            pLeft = pos0(k-1);   % 该段左边界 0
-            pRight = pos0(k);    % 该段右边界 0
-            % 若左边段更长，把左 0 右移；否则把右 0 左移
-            if k > 1 && segLen(k-1) >= 2
-                if pLeft < L
-                    seq([pLeft, pLeft+1]) = seq([pLeft+1, pLeft]);
-                end
-            elseif k < m && segLen(k+1) >= 2
-                if pRight > 1
-                    seq([pRight-1, pRight]) = seq([pRight, pRight-1]);
-                end
-            else
-                if pLeft < L
-                    seq([pLeft, pLeft+1]) = seq([pLeft+1, pLeft]);
-                end
+            pLeft = pos0(k-1);
+            pRight = pos0(k);
+            if k > 1 && segLen(k-1) >= 2 && pLeft < L && seq(pLeft+1) ~= 0
+                seq([pLeft, pLeft+1]) = seq([pLeft+1, pLeft]);
+            elseif k < m && segLen(k+1) >= 2 && pRight > 1 && seq(pRight-1) ~= 0
+                seq([pRight-1, pRight]) = seq([pRight, pRight-1]);
+            elseif pLeft < L && seq(pLeft+1) ~= 0
+                seq([pLeft, pLeft+1]) = seq([pLeft+1, pLeft]);
             end
         end
         pos0 = find(seq == 0);
@@ -484,6 +512,7 @@ end
 
 function seq = SegmentBasedCrossover_ensureNoZeroAtEnds(seq)
 % 辅助函数：确保序列首尾不为 0（0 仅作段间分隔，首尾必须是商家或客户点）
+% 若末尾有多个 0（如 ... 0, 0），将其中一个移到中间合法位置，避免与末位交换无效
     L = length(seq);
     while L >= 1 && seq(1) == 0
         idx = find(seq ~= 0, 1);
@@ -491,9 +520,32 @@ function seq = SegmentBasedCrossover_ensureNoZeroAtEnds(seq)
         seq([1, idx]) = seq([idx, 1]);
     end
     while L >= 1 && seq(L) == 0
-        idx = find(seq(1:L) ~= 0, 1, 'last');
-        if isempty(idx), break; end
-        seq([idx, L]) = seq([L, idx]);
+        if L >= 2 && seq(L-1) == 0
+            % 末尾两个 0 相邻：移除最后一个 0，插入到“某对完整点之后”
+            seqShort = seq(1:L-1);
+            nonZeroIdx = find(seqShort ~= 0);
+            inserted = false;
+            for k = 1:floor((length(nonZeroIdx)-1)/2)
+                if 2*k+1 > length(nonZeroIdx), break; end
+                afterPos = nonZeroIdx(2*k);
+                if afterPos < length(seqShort) && nonZeroIdx(2*k+1) == afterPos + 1
+                    seq = [seqShort(1:afterPos), 0, seqShort(afterPos+1:end)];
+                    inserted = true;
+                    break;
+                end
+            end
+            if ~inserted && length(nonZeroIdx) >= 2
+                afterPos = nonZeroIdx(min(2, length(nonZeroIdx)-1));
+                seq = [seqShort(1:afterPos), 0, seqShort(afterPos+1:end)];
+            else
+                break;
+            end
+        else
+            idx = find(seq(1:L) ~= 0, 1, 'last');
+            if isempty(idx), break; end
+            seq([idx, L]) = seq([L, idx]);
+        end
+        L = length(seq);
     end
 end
 
