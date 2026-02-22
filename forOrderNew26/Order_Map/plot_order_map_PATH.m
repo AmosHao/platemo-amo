@@ -1,24 +1,27 @@
 %% ========== 直接运行区域：修改下面的参数后直接运行脚本 ==========
 % 直接运行时的默认参数（修改这里即可）
-excel_file = '20260214order.xlsx';  % Excel文件名
+excel_file = '2026022221order.xlsx';  % Excel文件名
 obj_col = 2;  % obj列（1=f1总能量, 2=f2总时间）
 rank_idx = 1;  % 索引（第几小的值，如1表示最小值）
+filter_feasible = true;  % 是否只从可行解中选取（true=筛出details_data里Feasible=1的解）
 
 % 调用函数绘制
-plot_order_map_path_func(excel_file, obj_col, rank_idx);
+plot_order_map_path_func(excel_file, obj_col, rank_idx, filter_feasible);
 
 %% ========== 函数定义 ==========
-function plot_order_map_path_func(excel_file, obj_col, rank_idx)
+function plot_order_map_path_func(excel_file, obj_col, rank_idx, filter_feasible)
 % 绘制订单配送问题地图并显示指定解的路径
 % 
 % 参数:
-%   excel_file - Excel文件名（在 Order_Data/testData 下）或完整路径
-%   obj_col    - 目标列（1=f1总能量, 2=f2总时间）
-%   rank_idx   - 索引（第几小的值，如1表示最小值）
+%   excel_file      - Excel文件名（在 Order_Data/testData 下）或完整路径
+%   obj_col         - 目标列（1=f1总能量, 2=f2总时间）
+%   rank_idx        - 索引（第几小的值，如1表示最小值）
+%   filter_feasible - 是否只从可行解中选取（true 时先读 details_data，
+%                     筛出 Feasible=1 的行，再按 obj_col/rank_idx 排序选解）
 %
 % 示例:
-%   plot_order_map_path_func('20260214order_obj3minf1.xlsx', 1, 1);  % 绘制f1最小的解的路径
-%   plot_order_map_path_func('20260214order_obj3minf1.xlsx', 2, 1);  % 绘制f2最小的解的路径
+%   plot_order_map_path_func('20260222order.xlsx', 1, 1);        % f1最小的解
+%   plot_order_map_path_func('20260222order.xlsx', 2, 1, true);  % 可行解中f2最小的解
 
     % 默认参数
     if nargin < 1 || isempty(excel_file)
@@ -29,6 +32,9 @@ function plot_order_map_path_func(excel_file, obj_col, rank_idx)
     end
     if nargin < 3 || isempty(rank_idx)
         rank_idx = 1;  % 默认最小值
+    end
+    if nargin < 4 || isempty(filter_feasible)
+        filter_feasible = false;
     end
     
     % 引入数据文件
@@ -53,9 +59,37 @@ function plot_order_map_path_func(excel_file, obj_col, rank_idx)
         error('无法读取Excel数据，请检查Sheet名称');
     end
     
+    % ---- 筛选可行解 ----
+    % 读取 details_data，提取 Feasible=1（最后一列）的行索引，
+    % 然后将 obj_data / dec_data 限定在这些行上，再做排序选解
+    feasible_mask = true(size(obj_data, 1), 1);  % 默认全部保留
+    if filter_feasible
+        try
+            details = readmatrix(excel_file, 'Sheet', 'details_data');
+            if ~isempty(details)
+                feasible_col = details(:, end);   % 最后一列为 Feasible 标志
+                n_rows = min(size(obj_data, 1), numel(feasible_col));
+                feasible_mask = false(size(obj_data, 1), 1);
+                feasible_mask(1:n_rows) = (feasible_col(1:n_rows) == 1);
+                n_feasible = sum(feasible_mask);
+                fprintf('[筛选] details_data 共 %d 行，可行解 %d 个\n', ...
+                    size(details,1), n_feasible);
+                if n_feasible == 0
+                    warning('myapp:noFeasible', '%s', '没有找到任何可行解（Feasible=1），将使用全部解');
+                    feasible_mask = true(size(obj_data, 1), 1);
+                end
+            else
+                warning('myapp:emptyDetails', '%s', 'details_data Sheet 为空，忽略可行解筛选');
+            end
+        catch e
+            warning('myapp:readDetailsFailed', '读取 details_data 失败（%s），忽略可行解筛选', e.message);
+        end
+    end
+    
     % 找到指定obj列的第rank_idx小的值对应的索引
+    % 先在可行掩码范围内挑选有效行（finite + feasible）
     obj_col_data = obj_data(:, obj_col);
-    valid_idx = isfinite(obj_col_data);
+    valid_idx = isfinite(obj_col_data) & feasible_mask;
     obj_col_data_valid = obj_col_data(valid_idx);
     [sorted_obj, sort_idx] = sort(obj_col_data_valid);
     
@@ -63,7 +97,7 @@ function plot_order_map_path_func(excel_file, obj_col, rank_idx)
         error('索引 %d 超出范围，有效解数量为 %d', rank_idx, length(sort_idx));
     end
     
-    % 找到原始索引（考虑NaN行）
+    % 找到原始索引（考虑NaN行及feasible掩码）
     valid_positions = find(valid_idx);
     target_idx = valid_positions(sort_idx(rank_idx));
     
@@ -74,8 +108,12 @@ function plot_order_map_path_func(excel_file, obj_col, rank_idx)
     dec_sequence = dec_data(target_idx, :);
     
     % 显示信息
-    fprintf('选择解: obj列%d的第%d小值 = %.2f, 索引 = %d\n', ...
-        obj_col, rank_idx, sorted_obj(rank_idx), target_idx);
+    feasible_tag = '';
+    if filter_feasible
+        feasible_tag = '（仅可行解）';
+    end
+    fprintf('选择解%s: obj列%d的第%d小值 = %.2f, 索引 = %d\n', ...
+        feasible_tag, obj_col, rank_idx, sorted_obj(rank_idx), target_idx);
 
 % 创建图形窗口
 figure;
@@ -330,7 +368,7 @@ if exist('dec_sequence', 'var') && ~isempty(dec_sequence)
             if idx >= 1 && idx <= size(dotss, 1)
                 path_coords(i, :) = dotss(idx, :);
             else
-                warning('索引 %d 超出范围，跳过', idx);
+                warning('myapp:indexOutOfRange', '索引 %d 超出范围，跳过', idx);
                 path_coords(i, :) = [NaN, NaN, NaN];
             end
         end
@@ -371,8 +409,12 @@ if exist('dec_sequence', 'var') && ~isempty(dec_sequence)
     
     % 更新标题
     obj_name = {'总能量', '总时间'};
-    title(sprintf('订单配送问题地图 - %s第%d小解 (索引%d)', ...
-        obj_name{obj_col}, rank_idx, target_idx));
+    feasible_title_tag = '';
+    if filter_feasible
+        feasible_title_tag = ' [仅可行解]';
+    end
+    title(sprintf('订单配送问题地图%s - %s第%d小解 (索引%d)', ...
+        feasible_title_tag, obj_name{obj_col}, rank_idx, target_idx));
 end
 
 hold off;

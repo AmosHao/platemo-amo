@@ -1,8 +1,26 @@
 classdef planner_order_v3 < PROBLEM
 % <multi/many> <real> <large/none> <expensive/none>
+
+    properties
+        % 控制距离矩阵计算方式：
+        %   true  → 欧氏距离 + 障碍物惩罚（禁飞区/人流区/噪音区，默认）
+        %   false → 纯欧氏距离（忽略所有地图惩罚，方便对比）
+        %
+        % 切换方式：在 runplatemo_amo.m 调用 platemo() 之前设置全局变量：
+        %   global AMOS_USE_MAP_PENALTY;
+        %   AMOS_USE_MAP_PENALTY = false;   % 切换为纯欧氏距离
+        %   AMOS_USE_MAP_PENALTY = true;    % 恢复含惩罚（或 clear global）
+        use_map_penalty = false;
+    end
+
  methods
         %% Default settings of the problem
         function Setting(obj)
+            % 检查全局变量，允许在运行脚本里灵活切换距离计算模式
+            global AMOS_USE_MAP_PENALTY;
+            if ~isempty(AMOS_USE_MAP_PENALTY)
+                obj.use_map_penalty = logical(AMOS_USE_MAP_PENALTY);
+            end
             obj.n=10;  % 客户点数量
             obj.m=3;   % 无人机数量
             if isempty(obj.M); obj.M = 2; end
@@ -238,11 +256,18 @@ classdef planner_order_v3 < PROBLEM
             % // penalty_noise = 1000;
         end
         
-        % 计算考虑障碍物的距离矩阵（21×21）
+        % 计算距离矩阵（21×21）
         % 行/列索引：1-10=商家1-10, 11-20=客户点11-20, 21=配送中心
-        d_matrix = calculate_distance_matrix_with_obstacles(...
-            dotss, forbidden_zones, crowded_zones, noise_zones, ...
-            penalty_forbidden, penalty_crowded, penalty_noise);
+        if obj.use_map_penalty
+            % 含障碍物惩罚（禁飞区/人流区/噪音区）
+            d_matrix = calculate_distance_matrix_with_obstacles(...
+                dotss, forbidden_zones, crowded_zones, noise_zones, ...
+                penalty_forbidden, penalty_crowded, penalty_noise);
+        else
+            % 纯欧氏距离（传入空障碍物，函数会跳过所有惩罚）
+            d_matrix = calculate_distance_matrix_with_obstacles(...
+                dotss, [], [], [], 0, 0, 0);
+        end
         % 时间窗矩阵（21行：商家1-10，客户点11-20，配送中心）
         % 行索引：1-10=商家1-10, 11-20=客户点11-20, 21=配送中心
         TW_sec = [
@@ -278,7 +303,12 @@ classdef planner_order_v3 < PROBLEM
         
         %约束
         maxload=3;%最大载荷
-        maxEC=800000;%电池容量
+        % 修正后的能量公式 + 10km×10km地图：
+        %   均衡解（每架3-4单,7跳,均距4km）：~540kJ/架 → 900kJ 时可行
+        %   偏斜解（某架5单,11跳）：~850kJ → 900kJ 时仍可行（约束有余量）
+        %   极端解（某架7单以上）：>1000kJ → 仍违约（约束起惩罚作用）
+        % 结论：10km地图下900kJ是使约束有意义的合理值（约250Wh电池）
+        maxEC=800000;%电池容量（J），800kJ
 
     if size(PopDec,1)>0
         % 调试统计
@@ -496,8 +526,8 @@ classdef planner_order_v3 < PROBLEM
                 % 其中：m+q 是总质量（kg），g 是重力加速度，rho 是空气密度，A 是旋翼桨盘面积
                 UAV_mass = UAV_m + load_kg(i);  % 总质量（kg）
                 v_0 = sqrt((UAV_mass * g) / (2 * rho_air * A_rotor));
-                sqrt_term_up = sqrt((v_u/2)^2+v_0);
-                P_up_i = 79.85628 + UAV_w*(v_u/2+sqrt_term_up);
+                sqrt_term_up = sqrt((v_u/2)^2 + v_0^2);  % 量纲修正：括号内应为 v_0^2（m²/s²），而非 v_0（m/s）
+                P_up_i = P_0 + UAV_w*(v_u/2 + sqrt_term_up);  % P_0 代替硬编码常数，与动态计算一致
                 E_up = P_up_i * t_up;
         
                 % 水平飞行
@@ -512,10 +542,12 @@ classdef planner_order_v3 < PROBLEM
                 
                 % 2. 诱导功率：P_i,h = κ*T²/sqrt(2ρA) * sqrt_term
                 % sqrt_term = (sqrt(1 + V_h⁴/(4v_0⁴)) - V_h²/(2v_0²))^(1/2)
-                % 注意：应该是除以 2v_0² 而不是 2v_0，这样才能保证 sqrt_inner 总是为正
-                sqrt_inner = sqrt((1+v_h^4)/(4*v_0^4)) - v_h^2/(2*v_0^2);
-                sqrt_term_hor = sqrt(sqrt_inner);  % 对 sqrt_inner 取平方根
-                P_i_h = kappa * UAV_w^2 / sqrt(2*rho_air*A_rotor) * sqrt_term_hor;
+                % 正确公式（Zeng et al.）：sqrt(1 + V^4/(4*v_0^4)) - V^2/(2*v_0^2)
+                % 注意：分子内的 1 独立于 /(4*v_0^4)，不能写成 (1+v_h^4)/(4*v_0^4)（否则两项几乎相消，P_i_h≈0）
+                sqrt_inner = sqrt(1 + v_h^4/(4*v_0^4)) - v_h^2/(2*v_0^2);
+                sqrt_term_hor = sqrt(max(0, sqrt_inner));  % max(0,·) 防止数值误差产生负数
+                % P_i_h = κ·T^(3/2)/sqrt(2ρA)·sqrt_term = κ·T·v_0·sqrt_term（T^1.5 而非 T^2）
+                P_i_h = kappa * UAV_w * v_0 * sqrt_term_hor;
                 
                 % 3. 废阻功率：P_par = (1/2)ρS_FP*V_h³
                 P_par = 0.5 * rho_air * S_FP * v_h^3;
@@ -644,24 +676,25 @@ classdef planner_order_v3 < PROBLEM
             end
         end
         
-        % 约束--电量
+        % 约束--电量（直接用焦耳，与 Obj1 同单位；不再除以 1000）
         for kk = 1:m
             power_k = E_all(kk);
-            if  power_k > maxEC
-                Penalty2=Penalty2+((power_k-maxEC)/1000);%转为KJ，对应载重约束kg
+            if power_k > maxEC
+                Penalty2 = Penalty2 + (power_k - maxEC);
             end
         end
         
-        % 归一化惩罚项，避免目标值过大
-        % 使用相对惩罚，基于目标值的量级
-        baseE = max(1, real(sum(E_all)));  % 避免除以0，确保是实数
-        baseT = max(1, real(sum(T_all)));  % 避免除以0，确保是实数
+        % ---- 惩罚项加到目标函数 ----
+        % 设计原则：
+        %   Obj1（总能耗，J）：违约量本身就是 J，直接加，无需缩放
+        %   Obj2（时间成本，s）：用固定物理换算 1J ≈ 1/150s（约150W平均飞行功率）
+        %       使时间目标中的能量惩罚与时间值量级相当（100kJ→667s，典型T约1000-3000s）
+        %   两者使用相同的违约量 → 无论个体能量高低，惩罚比例一致，不扭曲Pareto前沿
+        E_to_T_scale = 1/150;  % 固定物理换算比（s/J），基于约150W平均水平巡航功率
+        totalViol = Penalty1 + Penalty2;  % 总违约量（J当量，Penalty1已乘loadScale=1e4）
         
-        % 惩罚系数：根据目标值量级调整
-        penaltyCoeff = max(1, real(min(baseE, baseT)) / 1000);  % 从1000改为10000，降低惩罚强度，确保是实数
-        
-        PopObj(j,1)=real(PopObj(j,1)+penaltyCoeff*(Penalty1+Penalty2)+Penalty3);  % 添加约束惩罚，确保是实数
-        PopObj(j,2)=real(PopObj(j,2)+penaltyCoeff*(Penalty1+Penalty2)+Penalty3);  % 添加约束惩罚，确保是实数
+        PopObj(j,1) = real(PopObj(j,1) + totalViol);
+        PopObj(j,2) = real(PopObj(j,2) + totalViol * E_to_T_scale + Penalty3);
         
         % 确保目标值为有限值（记录无效原因）
         is_invalid = false;
@@ -1073,6 +1106,128 @@ classdef planner_order_v3 < PROBLEM
         %          R=load('SMEAGLT5.pf');
         % % 
         % end
+
+        %% 诊断方法：返回每架无人机的能耗/用时/惩罚项，用于结果分析
+        function Details = CalDetails(obj, PopDec)
+        % 返回矩阵 Details（N 行），列为：
+        %   1       : Penalty1（载重超限，J当量）
+        %   2       : Penalty2（电量超限，J）
+        %   3..2+m  : 每架无人机能耗 E_all(1..m)，单位 J
+        %   3+m..2+2m: 每架无人机时间代价 T_all(1..m)，单位 s
+        %   2+2m+1  : 是否可行（1=可行，0=违约）
+        % ---- 参数（与 CalObj 保持一致）----
+        N = size(PopDec, 1);
+        n = obj.n;  m = obj.m;
+        UAV_m=2; demand_q=[0.5;0.7;0.65;0.9;0.35;0.2;0.9;0.1;0.45;0.77;0];
+        v_h=10; v_u=5; v_d=3; g=9.8; h_up_down=40;
+        rho_air=1.225; A_rotor=0.503;
+        Omega=300; R_rotor=0.4; delta_drag=0.012; kappa=1.1; S_FP=0.0151;
+        b_blades=4; c_chord=0.0157;
+        s_solidity=b_blades*c_chord*R_rotor/(pi*R_rotor^2);
+        P_0=(delta_drag/8)*rho_air*s_solidity*A_rotor*Omega^3*R_rotor^3;
+        maxload=3; maxEC=800000; loadScale=1e4;  % 与 CalObj 中 maxEC 保持同步
+        lam1=0.5; lam2=1.0;
+        % 加载地图数据
+        current_file_dir=fileparts(mfilename('fullpath'));
+        platemo_root=fileparts(fileparts(fileparts(current_file_dir)));
+        data_file_path=fullfile(platemo_root,'forOrderNew26','Order_Map','order_data.m');
+        if exist(data_file_path,'file'), run(data_file_path); end
+        if obj.use_map_penalty
+            d_matrix=calculate_distance_matrix_with_obstacles(...
+                dotss,forbidden_zones,crowded_zones,noise_zones,...
+                penalty_forbidden,penalty_crowded,penalty_noise);
+        else
+            d_matrix=calculate_distance_matrix_with_obstacles(...
+                dotss,[],[],[],0,0,0);
+        end
+        % 与 CalObj 中 TW_sec 保持同步（原始设置）
+        TW_sec=[0,15*60;0,10*60;0,10*60;0,10*60;0,10*60;0,15*60;0,12*60;0,10*60;0,10*60;0,10*60;
+                20*60,40*60;10*60,30*60;5*60,25*60;0*60,20*60;5*60,25*60;20*60,40*60;15*60,35*60;10*60,30*60;0*60,20*60;5*60,25*60;
+                0,1e11];
+        nCols = 2 + 2*m + 1;
+        Details = zeros(N, nCols);
+        for j = 1:N
+            route = PopDec(j,:);
+            P1=0; P2=0;
+            idx0=find(route==0);
+            idx0=[0,idx0,numel(route)+1];
+            routes=cell(m,1);
+            for k=1:m
+                if k<=length(idx0)-1
+                    routes{k}=route(idx0(k)+1:idx0(k+1)-1);
+                else, routes{k}=[];
+                end
+            end
+            T_all=zeros(1,m); E_all=zeros(1,m); load_all=zeros(1,m);
+            for k=1:m
+                seg=routes{k};
+                if isempty(seg), continue; end
+                segforlength=[0,seg,0];
+                npts=length(seg)+2;
+                load_at_point=zeros(length(segforlength),1);
+                for i=2:length(segforlength)-1
+                    pid=segforlength(i);
+                    if pid>=1&&pid<=n, load_at_point(i)=load_at_point(i-1)+demand_q(pid);
+                    elseif pid>n&&pid<=2*n, load_at_point(i)=load_at_point(i-1)-demand_q(pid-n);
+                    else, load_at_point(i)=load_at_point(i-1);
+                    end
+                end
+                load_at_point(end)=0;
+                load_kg=load_at_point(1:end-1);
+                load_all(k)=max(load_at_point);
+                T_k=0; E_k=0; time_cum=0;
+                for i=1:npts-1
+                    dot1=segforlength(i); if dot1==0, dot1=21; end
+                    dot2=segforlength(i+1); if dot2==0, dot2=21; end
+                    d_hor=d_matrix(dot1,dot2);
+                    UAV_mass=UAV_m+load_kg(i); UAV_w=UAV_mass*g;
+                    v_0=sqrt((UAV_mass*g)/(2*rho_air*A_rotor));
+                    % 上升
+                    t_up=h_up_down/v_u;
+                    sqrt_term_up=sqrt((v_u/2)^2+v_0^2);
+                    P_up=P_0+UAV_w*(v_u/2+sqrt_term_up);
+                    E_up=P_up*t_up;
+                    % 水平
+                    t_hor=d_hor/v_h;
+                    mu=v_h/(Omega*R_rotor);
+                    P_pro_h=P_0*(1+3*mu^2);
+                    sqrt_inner=sqrt(1+v_h^4/(4*v_0^4))-v_h^2/(2*v_0^2);
+                    sqrt_term_hor=sqrt(max(0,sqrt_inner));
+                    P_i_h=kappa*UAV_w*v_0*sqrt_term_hor;
+                    P_par=0.5*rho_air*S_FP*v_h^3;
+                    E_hor=(P_pro_h+P_i_h+P_par)*t_hor;
+                    % 下降
+                    t_down=h_up_down/v_d;
+                    v_d_0=v_d/v_0;
+                    P_down=P_0+UAV_w*v_0*(0.974-1.125*v_d_0-1.372*v_d_0^2-1.718*v_d_0^3-0.655*v_d_0^4);
+                    E_down=max(0,P_down*t_down);
+                    T_k_single=t_up+t_hor+t_down;
+                    time_cum=time_cum+T_k_single;
+                    dest_idx=segforlength(i+1);
+                    if dest_idx==0, tw_row=21;
+                    elseif dest_idx>=1&&dest_idx<=n, tw_row=dest_idx;
+                    elseif dest_idx>n&&dest_idx<=2*n, tw_row=dest_idx;
+                    else, tw_row=21;
+                    end
+                    aa=TW_sec(tw_row,1); bb=TW_sec(tw_row,2);
+                    if time_cum<aa, Tk=lam1*(aa-time_cum);
+                    elseif time_cum<=bb, Tk=time_cum-aa;
+                    else, Tk=lam2*(time_cum-bb);
+                    end
+                    T_k=T_k+Tk;
+                    E_k=E_k+real(E_up)+real(E_hor)+real(E_down);
+                end
+                T_all(k)=real(T_k); E_all(k)=real(E_k);
+            end
+            % 约束
+            for kk=1:m
+                if load_all(kk)>maxload, P1=P1+(load_all(kk)-maxload)*loadScale; end
+                if E_all(kk)>maxEC, P2=P2+(E_all(kk)-maxEC); end
+            end
+            feasible = double(P1==0 && P2==0);
+            Details(j,:) = [P1, P2, E_all, T_all, feasible];
+        end
+        end  % CalDetails
 
      
 end
