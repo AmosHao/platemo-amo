@@ -10,7 +10,7 @@ classdef planner_order_v3 < PROBLEM
         %   global AMOS_USE_MAP_PENALTY;
         %   AMOS_USE_MAP_PENALTY = false;   % 切换为纯欧氏距离
         %   AMOS_USE_MAP_PENALTY = true;    % 恢复含惩罚（或 clear global）
-        use_map_penalty = false;
+        use_map_penalty = true;
     end
 
  methods

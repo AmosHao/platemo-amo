@@ -14,7 +14,7 @@
 % plot_scatter('20260222order.xlsx', 'obj_data', 1, 2);
 
 % 方式5：完整参数 + 筛选可行解（filter_feasible=true 时只保留 details_data 中 Feasible=1 的解）
-plot_scatter('2026022221order.xlsx', 'obj_data', 1, 2, true);
+plot_scatter('2026022224_03order.xlsx', 'obj_data', 1, 2, true);
 
 
 

@@ -1,6 +1,6 @@
 %% ========== 直接运行区域：修改下面的参数后直接运行脚本 ==========
 % 直接运行时的默认参数（修改这里即可）
-excel_file = '2026022221order.xlsx';  % Excel文件名
+excel_file = '2026022224_09order.xlsx';  % Excel文件名
 obj_col = 2;  % obj列（1=f1总能量, 2=f2总时间）
 rank_idx = 1;  % 索引（第几小的值，如1表示最小值）
 filter_feasible = true;  % 是否只从可行解中选取（true=筛出details_data里Feasible=1的解）

@@ -19,7 +19,7 @@
 % global AMOS_USE_MAP_PENALTY; AMOS_USE_MAP_PENALTY = false;  % 纯欧氏距离
 % global AMOS_USE_MAP_PENALTY; AMOS_USE_MAP_PENALTY = true;   % 含惩罚（默认）
 
-[Dec,Obj,Dec_end,Obj_end,igd,hv,igd_end,hv_end]=runplatemo_all1(@planner_order_v3,@A_amos,100,80000,20,2);
+[Dec,Obj,Dec_end,Obj_end,igd,hv,igd_end,hv_end]=runplatemo_all1(@planner_order_v3,@A_amos,100,90000,30,2);
 % [clustName,clustTag,clustName_end,clustTag_end,Dec,Obj,Dec_end,Obj_end,igd,hv,igd_end,hv_end]=runplatemo_all1(@planner_travel_maxhjd02,@RMDE,100,10000,20,3,dots,dot1,dot2);
 % end
 function [Dec,Obj,Dec_end,Obj_end,igd,hv,igd_end,hv_end]=runplatemo_all1(problem,algorithm,N,maxFE,s,M)
@@ -36,24 +36,24 @@ num_dec_columns = numel(lastSolution(1).dec);
 
 Obj_end = zeros(numel(lastSolution),num_obj_columns); % 初始化存储obj值的数组
 Dec_end = zeros(numel(lastSolution),num_dec_columns);
-% clustTag_end = zeros(numel(lastSolution),num_clustTag_columns);
-% clustName_end = zeros(numel(lastSolution),num_clustName_columns);
-% validtrait_end = zeros(numel(lastSolution),1);
-% bj_end = zeros(numel(lastSolution),num_bj_columns);
+clustTag_end = zeros(numel(lastSolution), 1);  % 每个解的聚类编号
 for idx = 1:numel(lastSolution)
     solution = lastSolution(idx);
-    Obj = solution.obj; % 提取每个1*1的solution的obj值
+    Obj = solution.obj;
     Obj_end(idx,:) = Obj;
     dec = solution.dec;
     Dec_end(idx,:) = dec;
-    % add_clustTag = solution.add_clustTag;
-    % clustTag_end(idx,:) = add_clustTag;
-    % add_clustName = solution.add_clustName;
-    % clustName_end(idx,:) = add_clustName;
-    % validtrait = solution.validtrait;
-    % validtrait_end(idx,:) = validtrait;
-    % bj = solution.bj;
-    % bj_end(idx,:) = bj;
+    % 提取聚类标签（add_clustTag 字段，由 A_amos.m 写入）
+    try
+        ct = solution.add_clustTag;
+        if ~isempty(ct)
+            clustTag_end(idx) = ct(1);
+        else
+            clustTag_end(idx) = idx;
+        end
+    catch
+        clustTag_end(idx) = idx;
+    end
 end
 % num_pop_columns = numel(lastSolution(1).dec);
 % Pop = zeros(numel(lastSolution),num_pop_columns); % 初始化存储obj值的数组。
@@ -156,7 +156,7 @@ if ~isfolder(output_dir)
 end
 
 % 创建唯一的文件名（保存到 Order_Data 中）
-filename = fullfile(output_dir, '2026022221_dma_order.xlsx');
+filename = fullfile(output_dir, '2026022224_09dma_order.xlsx');
 
 % 将 obj 矩阵保存到 'Sheet1'
 writematrix(Obj_end, filename, 'Sheet', 'obj_data');
@@ -169,6 +169,12 @@ writematrix(Dec_end, filename, 'Sheet', 'dec_data');
 % writematrix(bj_end, filename, 'Sheet', 'bj_data');
 
 writematrix(hv, filename, 'Sheet', 'hv_data');
+
+% 保存聚类标签（每行：f1, f2, clustTag）
+clustData = [Obj_end, clustTag_end];
+clustHeader = {'f1_energy_J', 'f2_time_s', 'clustTag'};
+writecell(clustHeader, filename, 'Sheet', 'clust_data', 'Range', 'A1');
+writematrix(clustData, filename, 'Sheet', 'clust_data', 'Range', 'A2');
 
 % ---- 诊断：调用 CalDetails 获取每架无人机能耗/用时/惩罚项 ----
 m = pro.m;  % 无人机数量
@@ -210,6 +216,14 @@ end
 fprintf('\n');
 fprintf('  maxEC=800 kJ，超出该值即违约。\n');
 fprintf('==========================================\n\n');
+
+% 绘制聚类散点图
+plot_clust_scatter(Obj_end, clustTag_end, get_filename_only_local(filename));
+end
+
+function name = get_filename_only_local(path)
+    [~, name, ext] = fileparts(path);
+    name = [name ext];
 end
 
 

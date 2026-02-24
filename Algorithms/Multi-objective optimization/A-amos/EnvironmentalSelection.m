@@ -101,6 +101,35 @@ function [pop, objVals, clustTag, clustName, centroid, Population] = ...
     tmpSize = size(auxPop, 1);
     clustTagAll = [clustTag; inf(tmpSize, 1)];
     
+    % ── 在非支配排序前去除决策空间重复解 ──────────────────────────────────
+    % 目的：防止重复解以"非支配"身份批量进入下一代，是根治种群退化的关键。
+    % 保留每组重复中目标值最好的那个（f1最小，tie-break用f2）。
+    [~, uniqueIdx] = unique(popAll, 'rows', 'stable');
+    if length(uniqueIdx) < size(popAll, 1)
+        dupCount = size(popAll, 1) - length(uniqueIdx);
+        % 对每组重复只保留目标值最优的一个
+        keepIdx = false(size(popAll, 1), 1);
+        keepIdx(uniqueIdx) = true;
+        % 找出被 unique 丢弃的重复组，从中选最优保留
+        allIdx = 1:size(popAll, 1);
+        dupIdx = setdiff(allIdx, uniqueIdx);
+        for di = 1:length(dupIdx)
+            thisRow = popAll(dupIdx(di), :);
+            sameRows = find(ismember(popAll, thisRow, 'rows'));
+            % 从同组中找目标最优的（f1最小，相同时取f2最小）
+            [~, bestPos] = sortrows(objValsAll(sameRows, :), [1, 2]);
+            bestGlobal = sameRows(bestPos(1));
+            keepIdx(bestGlobal) = true;
+        end
+        popAll      = popAll(keepIdx, :);
+        objValsAll  = objValsAll(keepIdx, :);
+        clustTagAll = clustTagAll(keepIdx);
+        allVals     = allVals(keepIdx);
+        % fprintf('环境选择前去重：移除 %d 个重复解（合并池 %d → %d）\n', ...
+        %     dupCount, dupCount + size(popAll,1), size(popAll,1));
+    end
+    % ──────────────────────────────────────────────────────────────────────
+    
     % 非支配排序
     [FrontNo, ~] = NDSort(objValsAll, inf);
     
@@ -170,6 +199,13 @@ function [pop, objVals, clustTag, clustName, centroid, Population] = ...
                 fitV = zeros(PSize, 1);
                 [frontObjvs, IX] = sortrows(frontObjvs, [1, 2]);  % 先按f1排序，f1相同时按f2排序
                 
+                % 强制保护端点解：f1最小（排序后第1个）和f2最小（f2的argmin）
+                % 这两个解决定了Pareto前沿的覆盖范围，删除它们会导致HV突然跌落
+                protectedSorted = false(PSize, 1);
+                protectedSorted(1) = true;  % f1最小解（排序后idx=1）
+                [~, f2MinSortedIdx] = min(frontObjvs(:, 2));
+                protectedSorted(f2MinSortedIdx) = true;  % f2最小解
+                
                 % 检查f1值的唯一性
                 uniqueF1 = unique(frontObjvs(:, 1));
                 hasDuplicateF1 = length(uniqueF1) < PSize;
@@ -236,6 +272,13 @@ function [pop, objVals, clustTag, clustName, centroid, Population] = ...
                     fitV = fitV + 1e-8 * rand(PSize, 1);  % 添加微小随机扰动
                 end
                 
+                % 端点保护：将被保护解的fitV设为inf，使其不会被min选中删除
+                % 只有在非端点解数量足够时才保护（避免全部被保护导致死循环）
+                nonProtectedCount = sum(~protectedSorted);
+                if nonProtectedCount > 0
+                    fitV(protectedSorted) = inf;
+                end
+                
                 [~, loc] = min(fitV);
             else
                 % 多目标：使用超体积贡献
@@ -261,6 +304,10 @@ function [pop, objVals, clustTag, clustName, centroid, Population] = ...
                 if length(auxAll) >= loc
                     auxAll(loc) = [];
                 end
+                % 同步删除端点保护标记
+                if exist('protectedSorted', 'var') && length(protectedSorted) >= loc
+                    protectedSorted(loc) = [];
+                end
                 PSize = PSize - 1;
             else
                 break;  % 如果索引无效，退出循环
@@ -272,12 +319,16 @@ function [pop, objVals, clustTag, clustName, centroid, Population] = ...
         clustTag = auxTag;
     end
     
-    % 决策空间多样性维护：一次性替换所有重复（恢复有效性，打破局部最优）
+    % 兜底去重（应极少触发，因为入口处已过滤）：最多替换 5%
     [~, ia, ~] = unique(pop, 'rows');
     duplicateIndices = setdiff(1:size(pop, 1), ia);
     if ~isempty(duplicateIndices)
+        fprintf('[兜底] 选择后仍有 %d 个重复解\n', length(duplicateIndices));
+        maxReplace = max(1, floor(size(pop, 1) * 0.05));  % 最多替换 5%
+        if length(duplicateIndices) > maxReplace
+            duplicateIndices = duplicateIndices(randperm(length(duplicateIndices), maxReplace));
+        end
         numReplace = length(duplicateIndices);
-        % 批量生成随机新解替换（保持速度，打破局部最优）
         newPop = Problem.Initialization(numReplace);
         pop(duplicateIndices, :) = newPop.decs;
         objVals(duplicateIndices, :) = newPop.objs;

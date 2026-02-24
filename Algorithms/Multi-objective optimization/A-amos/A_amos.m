@@ -4,7 +4,7 @@ classdef A_amos < ALGORITHM
 % 基于PRMO改造的订单分配多目标优化算法
 % 
 % 参数说明:
-% Kmax --- 12 --- 目标空间聚类最大数量（随种群增大而增加）
+% Kmax --- 20 --- 目标空间聚类最大数量（随种群增大而增加）
 % BETA --- 0.8 --- 邻域选择平衡参数
 % pc --- 0.9 --- 交叉概率（保持高交叉率以充分利用大种群）
 % pm --- 0.2 --- 变异概率（适度增加以提高探索能力）
@@ -20,7 +20,7 @@ classdef A_amos < ALGORITHM
            % - Kmax: 聚类数随种群增大而增加
            % - pc/pm: 保持较高的交叉概率，增加变异概率以提高多样性
            % - maxgen: 增加迭代次数以充分利用大种群
-           [Kmax, BETA, pc, pm, maxgen] = Algorithm.ParameterSet(12, 0.8, 0.8, 0.3, 400);
+           [Kmax, BETA, pc, pm, maxgen] = Algorithm.ParameterSet(20, 0.8, 0.8, 0.3, 400);
            
            % 修复概率（降低以增加多样性，避免过度修复导致局部最优）
            repairProb = 0.6;  % 60%概率进行顺序约束修复
@@ -43,59 +43,80 @@ classdef A_amos < ALGORITHM
            centroid = objVals;  % 聚类中心在目标空间
            
            %% 局部最优避免机制：停滞检测与自适应参数
-           bestObjHistory = [];  % 记录历史最优目标值
-           stagnationCounter = 0;  % 停滞计数器
-           stagnationThreshold = 20;  % 停滞阈值（连续20代无改进）
-           adaptivePm = pm;  % 自适应变异概率
-           adaptivePc = pc;  % 自适应交叉概率
-           restartInterval = 50;  % 重启间隔（每50代检查一次）
-           diversityHistory = [];  % 多样性历史
+           hvHistory = [];          % 记录历史超体积（HV）值，越大越好
+           stagnationCounter = 0;   % 停滞计数器
+           stagnationThreshold = 20;% 停滞阈值（连续20代HV无显著增长）
+           adaptivePm = pm;         % 自适应变异概率
+           adaptivePc = pc;         % 自适应交叉概率
+           restartInterval = 50;    % 重启间隔（每50代检查一次）
+           diversityHistory = [];   % 多样性历史
+           
+           %% 精英档案：永久保存历史最优端点解，防止好的端点被截断淘汰
+           eliteF1Dec = [];   % f1目标最小的解（决策向量）
+           eliteF1Obj = [];   % f1目标最小的解（目标值）
+           eliteF2Dec = [];   % f2目标最小的解（决策向量）
+           eliteF2Obj = [];   % f2目标最小的解（目标值）
            
                %% 主优化循环
            gen = 0;
            while Algorithm.NotTerminated(Population)
                gen = gen + 1;
                
-               %% 停滞检测与自适应参数调整
-               if ~isempty(objVals) && size(objVals, 1) > 0
-                   % 计算当前最优（超体积或Pareto前沿大小）
-                   validObj = objVals(objVals(:,1) < 1e9, :);
-                   if ~isempty(validObj)
-                       currentBest = min(validObj(:,1));  % 或使用超体积指标
-                       bestObjHistory = [bestObjHistory, currentBest];
-                       
-                       % 计算多样性（目标空间的分散度）
-                       if size(validObj, 1) > 1
-                           diversity = mean(std(validObj, 0, 1)) / (mean(mean(validObj)) + 1e-10);
-                           diversityHistory = [diversityHistory, diversity];
-                       end
-                       
-                       % 检测停滞：最近stagnationThreshold代无显著改进
-                       if length(bestObjHistory) > stagnationThreshold
-                           recentBest = bestObjHistory(end-stagnationThreshold+1:end);
-                           improvement = (recentBest(1) - recentBest(end)) / (abs(recentBest(1)) + 1e-10);
-                           if improvement < 0.01  % 改进小于1%
-                               stagnationCounter = stagnationCounter + 1;
-                               % 自适应增加变异率和探索性（更激进，避免局部最优）
-                               adaptivePm = min(0.9, pm * (1 + stagnationCounter * 0.15));  % 最高0.9
-                               adaptivePc = max(0.4, pc * (1 - stagnationCounter * 0.08));  % 最低0.4
-                           else
-                               stagnationCounter = max(0, stagnationCounter - 1);
-                               adaptivePm = pm;
-                               adaptivePc = pc;
-                           end
-                       end
-                       
-                       % 多样性过低时增加探索
-                       if length(diversityHistory) > 10
-                           recentDiversity = mean(diversityHistory(end-9:end));
-                           if recentDiversity < 0.01
-                               adaptivePm = min(0.8, adaptivePm * 1.2);
-                               adaptivePc = max(0.5, adaptivePc * 0.9);
-                           end
-                       end
-                   end
-               end
+              %% 停滞检测与自适应参数调整（基于超体积HV）
+              if ~isempty(objVals) && size(objVals, 1) > 0
+                % fprintf('开始停滞检测与自适应参数调整\n');
+                  validObj = objVals(objVals(:,1) < 1e9, :);
+                  if ~isempty(validObj)
+                      % 计算当前种群的超体积（HV越大越好）
+                      currentHV = compute_hv_2d(validObj);
+                      hvHistory = [hvHistory, currentHV];
+                      % [诊断] 每代输出有效解数量、f1/f2范围和HV
+                      if mod(gen, 1) == 0
+                          f1vals = validObj(:,1); f2vals = validObj(:,2);
+                          % fprintf('[Gen %3d] 有效解: %d/%d  f1=[%.0f,%.0f]  f2=[%.0f,%.0f]  HV=%.6f\n', ...
+                          %     gen, size(validObj,1), size(objVals,1), ...
+                          %     min(f1vals), max(f1vals), min(f2vals), max(f2vals), currentHV);
+                      end
+                      
+                      % 计算多样性（目标空间的分散度，用于补充判断）
+                      if size(validObj, 1) > 1
+                          diversity = mean(std(validObj, 0, 1)) / (mean(mean(validObj)) + 1e-10);
+                          diversityHistory = [diversityHistory, diversity];
+                      end
+                      
+                     % 检测停滞：最近stagnationThreshold代HV无显著增长
+                     if length(hvHistory) > stagnationThreshold
+                         recentHV = hvHistory(end-stagnationThreshold+1:end);
+                         improvement = (recentHV(end) - recentHV(1)) / (abs(recentHV(1)) + 1e-10);
+                         if improvement < 0.01  % HV增长不足1%
+                             stagnationCounter = stagnationCounter + 1;
+                             adaptivePm = min(0.9, pm * (1 + stagnationCounter * 0.15));
+                             adaptivePc = max(0.4, pc * (1 - stagnationCounter * 0.08));
+                             if mod(gen, 20) == 0
+                                 fprintf('[Gen %3d] 停滞(计数=%d): HV=%.4f, 增长=%.4f%%, Pm=%.3f, Pc=%.3f\n', ...
+                                     gen, stagnationCounter, currentHV, improvement*100, adaptivePm, adaptivePc);
+                             end
+                         else
+                             stagnationCounter = max(0, stagnationCounter - 1);
+                             adaptivePm = pm;
+                             adaptivePc = pc;
+                         end
+                     end
+                     
+                     % 多样性过低时额外增加探索
+                     if length(diversityHistory) > 10
+                         recentDiversity = mean(diversityHistory(end-9:end));
+                         if recentDiversity < 0.01
+                             adaptivePm = min(0.8, adaptivePm * 1.2);
+                             adaptivePc = max(0.5, adaptivePc * 0.9);
+                             if mod(gen, 20) == 0
+                                 fprintf('[Gen %3d] 多样性过低: diversity=%.6f, Pm=%.3f, Pc=%.3f\n', ...
+                                     gen, recentDiversity, adaptivePm, adaptivePc);
+                             end
+                         end
+                     end
+                  end
+              end
                
                %% 随机重启机制（恢复有效性：一次性替换10%，打破局部最优）
                % 注意：重启时的新解会通过Initialization评估，但这是必要的
@@ -146,8 +167,18 @@ classdef A_amos < ALGORITHM
                end
                globalSize = size(globalClust, 1);
                
-               %% 个体进化
-               for i = 1:popSize
+             %% 个体进化
+             % [算子调试计数器] 每代重置
+             dbg_cross_ptc  = 0;  % 位置追踪交叉(PTC)调用次数
+             dbg_cross_ppc  = 0;  % 对优先级交叉(PPC)调用次数
+             dbg_cross_opc  = 0;  % 顺序保持交叉(OPC)调用次数
+             dbg_cross_def  = 0;  % 交叉触发克隆防御次数
+             dbg_mut_t1     = 0;  % 变异策略1调用次数（商家前移）
+             dbg_mut_t2     = 0;  % 变异策略2调用次数（客户后移）
+             dbg_mut_t3     = 0;  % 变异策略3调用次数（分隔符平移）
+             dbg_mut_t4     = 0;  % 变异策略4调用次数（跨段对迁移）
+             dbg_mut_def    = 0;  % 变异触发克隆防御次数
+             for i = 1:popSize
                    if i > size(pop, 1) || i > size(objVals, 1) || i > length(clustTag)
                        continue;  % 跳过无效索引
                    end
@@ -208,33 +239,52 @@ classdef A_amos < ALGORITHM
                        parent = currentSol;
                    end
                    
-                   %% 对选中的父代应用交叉和变异操作生成子代
-                   % 使用自适应概率
-                   useCrossover = rand < adaptivePc;
-                   useMutation = rand < adaptivePm;
-                   
-                   % 首先应用交叉操作
-                   if useCrossover && globalSize >= 1
-                       % 扩大父代池：以概率从全种群选 parent2，避免只用 globalClust 导致基因库过小
-                       if rand < 0.5 && popSize > 1
-                           idx2 = randi(popSize);
-                           parent2 = pop(idx2, :);
-                       else
-                           idx2 = randsample(globalSize, 1);
-                           parent2 = globalClust(idx2, :);
-                       end
-                       
-                       % 三种交叉之一：位置追踪 / 对优先级 / 顺序保持（内部随机选择）
-                       trialSol = SegmentBasedCrossover(parent, parent2, n, m, varDim);
-                       
-                       if length(trialSol) ~= varDim
-                           trialSol = [trialSol, zeros(1, max(0, varDim - length(trialSol)))];
-                           trialSol = trialSol(1:varDim);
-                       end
-                   else
-                       % 直接应用变异操作
-                       trialSol = OrderPreservingMutation(parent, m, varDim, n);
-                   end
+                 %% 对选中的父代应用交叉和变异操作生成子代
+                 % 使用自适应概率
+                 useCrossover = rand < adaptivePc;
+                 useMutation = rand < adaptivePm;
+                 % 停滞越严重，T4大步长变异比例越高（上限0.7），避免细粒度策略在收敛种群上空转
+                 explorationRate = min(0.70, 0.25 + stagnationCounter * 0.02);
+                  
+                 % 首先应用交叉操作
+                 if useCrossover && globalSize >= 1
+                     % parent2 选取策略：70%从全种群随机选（保证多样性），30%从全局代表集选
+                     % 特别规定：parent2 不能等于 parent（避免自交叉产生克隆）
+                     maxTry = 5;
+                     parent2 = parent;
+                     for tryIdx = 1:maxTry
+                         if rand < 0.7 && popSize > 1
+                             idx2 = randi(popSize);
+                             parent2 = pop(idx2, :);
+                         else
+                             idx2 = randsample(globalSize, 1);
+                             parent2 = globalClust(idx2, :);
+                         end
+                         if ~isequal(parent, parent2), break; end
+                     end
+                     
+                    % 三种交叉之一：位置追踪 / 对优先级 / 顺序保持（内部随机选择）
+                    [trialSol, crossDbg] = SegmentBasedCrossover(parent, parent2, n, m, varDim);
+                    % 统计各策略调用次数和克隆防御
+                    if crossDbg.strategy == 1, dbg_cross_ptc = dbg_cross_ptc + 1;
+                    elseif crossDbg.strategy == 2, dbg_cross_ppc = dbg_cross_ppc + 1;
+                    else, dbg_cross_opc = dbg_cross_opc + 1; end
+                    if crossDbg.cloneDefended, dbg_cross_def = dbg_cross_def + 1; end
+                     
+                     if length(trialSol) ~= varDim
+                         trialSol = [trialSol, zeros(1, max(0, varDim - length(trialSol)))];
+                         trialSol = trialSol(1:varDim);
+                     end
+                 else
+                     % 直接应用变异操作（传入动态explorationRate，停滞时增大T4比例）
+                     [trialSol, mutDbg] = OrderPreservingMutation(parent, m, varDim, n, explorationRate);
+                     % 统计各策略调用次数和克隆防御
+                     if mutDbg.strategy == 1, dbg_mut_t1 = dbg_mut_t1 + 1;
+                     elseif mutDbg.strategy == 2, dbg_mut_t2 = dbg_mut_t2 + 1;
+                     elseif mutDbg.strategy == 3, dbg_mut_t3 = dbg_mut_t3 + 1;
+                     else, dbg_mut_t4 = dbg_mut_t4 + 1; end
+                     if mutDbg.cloneDefended, dbg_mut_def = dbg_mut_def + 1; end
+                 end
                    
                    % 增强探索性操作：避免局部最优
                    % 1. 当停滞时增加随机扰动（段交换）- 仅当两段均为完整对（偶数长度）时交换，避免产生 "0 0 18"
@@ -259,10 +309,15 @@ classdef A_amos < ALGORITHM
                            end
                        end
                    end
-                   % 2. 定期（每10代）对所有个体增加一次额外变异，打破局部最优
-                   if mod(gen, 10) == 0 && rand < 0.2
-                       trialSol = OrderPreservingMutation(trialSol, m, varDim, n);
-                   end
+                 % 2. 定期（每10代）对所有个体增加一次额外变异，打破局部最优
+                 if mod(gen, 10) == 0 && rand < 0.2
+                     [trialSol, mutDbg2] = OrderPreservingMutation(trialSol, m, varDim, n, explorationRate);
+                      if mutDbg2.strategy == 1, dbg_mut_t1 = dbg_mut_t1 + 1;
+                      elseif mutDbg2.strategy == 2, dbg_mut_t2 = dbg_mut_t2 + 1;
+                      elseif mutDbg2.strategy == 3, dbg_mut_t3 = dbg_mut_t3 + 1;
+                      else, dbg_mut_t4 = dbg_mut_t4 + 1; end
+                      if mutDbg2.cloneDefended, dbg_mut_def = dbg_mut_def + 1; end
+                  end
                    
                    % 统一段结构修复：确保每段均为完整商家-客户对（可两 0 相邻，但左右段必须完整）
                    trialSol = OrderSegmentRepair(trialSol, n, m, varDim);
@@ -280,13 +335,92 @@ classdef A_amos < ALGORITHM
                    end
                end
                
-               %% 环境选择
-               selectedSize = Problem.N;
-               [pop, objVals, clustTag, clustName, centroid, Population] = ...
-                   EnvironmentalSelection(auxPop, pop, objVals, clustTag, clustName, ...
-                   centroid, selectedSize, objDim, varDim, Kmax, Problem);
-               
-               popSize = size(pop, 1);
+             %% [算子调试] 每10代输出一次算子调用统计
+             if mod(gen, 10) == 0
+                 crossTotal = dbg_cross_ptc + dbg_cross_ppc + dbg_cross_opc;
+                 mutTotal   = dbg_mut_t1 + dbg_mut_t2 + dbg_mut_t3 + dbg_mut_t4;
+                 fprintf('[Gen %3d] 交叉(%d次): PTC=%d PPC=%d OPC=%d | 克隆防御=%d\n', ...
+                     gen, crossTotal, dbg_cross_ptc, dbg_cross_ppc, dbg_cross_opc, dbg_cross_def);
+                 fprintf('[Gen %3d] 变异(%d次):  T1=%d  T2=%d  T3=%d  T4=%d | 克隆防御=%d  explorationRate=%.2f\n', ...
+                     gen, mutTotal, dbg_mut_t1, dbg_mut_t2, dbg_mut_t3, dbg_mut_t4, dbg_mut_def, explorationRate);
+             end
+              
+              %% 环境选择前：缓存精英对应的 Population 对象（在种群变化前取，零额外FE）
+              % 精英解已在历史迭代中评估，目标值存于 eliteF1Obj/eliteF2Obj，不需重新评估
+              eliteF1PopObj = [];
+              eliteF2PopObj = [];
+              if ~isempty(eliteF1Dec)
+                  f1InPop = find(all(pop == eliteF1Dec, 2), 1);
+                  if ~isempty(f1InPop) && f1InPop <= length(Population)
+                      eliteF1PopObj = Population(f1InPop);
+                  end
+              end
+              if ~isempty(eliteF2Dec) && ~isequal(eliteF2Dec, eliteF1Dec)
+                  f2InPop = find(all(pop == eliteF2Dec, 2), 1);
+                  if ~isempty(f2InPop) && f2InPop <= length(Population)
+                      eliteF2PopObj = Population(f2InPop);
+                  end
+              end
+              
+              %% 环境选择：只传入 auxPop（N个子代），每代固定消耗 2N 次 FE
+              selectedSize = Problem.N;
+              [pop, objVals, clustTag, clustName, centroid, Population] = ...
+                  EnvironmentalSelection(auxPop, pop, objVals, clustTag, clustName, ...
+                  centroid, selectedSize, objDim, varDim, Kmax, Problem);
+              
+              popSize = size(pop, 1);
+              
+              %% 更新精英档案（从选择后种群中提取当代最优端点，单调更新）
+              if ~isempty(objVals)
+                  validMask = objVals(:,1) < 1e9;
+                  if any(validMask)
+                      validObj = objVals(validMask, :);
+                      validDec = pop(validMask, :);
+                      [~, f1MinIdx] = min(validObj(:,1));
+                      if isempty(eliteF1Obj) || validObj(f1MinIdx,1) < eliteF1Obj(1)
+                          eliteF1Dec = validDec(f1MinIdx, :);
+                          eliteF1Obj = validObj(f1MinIdx, :);
+                          % 同步更新缓存的 Population 对象
+                          f1InNew = find(all(pop == eliteF1Dec, 2), 1);
+                          if ~isempty(f1InNew) && f1InNew <= length(Population)
+                              eliteF1PopObj = Population(f1InNew);
+                          end
+                      end
+                      [~, f2MinIdx] = min(validObj(:,2));
+                      if isempty(eliteF2Obj) || validObj(f2MinIdx,2) < eliteF2Obj(2)
+                          eliteF2Dec = validDec(f2MinIdx, :);
+                          eliteF2Obj = validObj(f2MinIdx, :);
+                          f2InNew = find(all(pop == eliteF2Dec, 2), 1);
+                          if ~isempty(f2InNew) && f2InNew <= length(Population)
+                              eliteF2PopObj = Population(f2InNew);
+                          end
+                      end
+                  end
+              end
+              
+              %% 强制精英保留：若精英在环境选择后被淘汰，写回种群替换最差解，零额外FE
+              if ~isempty(eliteF1Dec) && ~isempty(objVals) && popSize > 0
+                  if ~any(all(pop == eliteF1Dec, 2))
+                      [~, worstIdx] = max(objVals(:,1));
+                      pop(worstIdx, :) = eliteF1Dec;
+                      objVals(worstIdx, :) = eliteF1Obj;
+                      clustTag(worstIdx) = inf;
+                      if ~isempty(eliteF1PopObj) && worstIdx <= length(Population)
+                          Population(worstIdx) = eliteF1PopObj;
+                      end
+                  end
+              end
+              if ~isempty(eliteF2Dec) && ~isempty(objVals) && popSize > 0 && ~isequal(eliteF2Dec, eliteF1Dec)
+                  if ~any(all(pop == eliteF2Dec, 2))
+                      [~, worstIdx] = max(objVals(:,2));
+                      pop(worstIdx, :) = eliteF2Dec;
+                      objVals(worstIdx, :) = eliteF2Obj;
+                      clustTag(worstIdx) = inf;
+                      if ~isempty(eliteF2PopObj) && worstIdx <= length(Population)
+                          Population(worstIdx) = eliteF2PopObj;
+                      end
+                  end
+              end
                
                % 更新Population对象
                if popSize > 0 && length(Population) >= popSize
@@ -298,6 +432,51 @@ classdef A_amos < ALGORITHM
                    end
                end
            end
+        end
+    end
+end
+
+function hv = compute_hv_2d(objVals)
+% 计算二维超体积（用于停滞检测）
+% 使用固定参考范围归一化，与 HV.m 保持一致，但先过滤惩罚无效解
+% 输入：objVals - N×2 目标值矩阵（调用前已过滤 f1<1e9）
+% 输出：hv - 归一化后的超体积值（[0,1] 范围）
+    fmin = [0, 0];
+    fmax = [1e7, 4e5];  % 与 HV.m 中 fmax 保持一致
+
+    % 归一化到 [0, 1/1.1] 空间
+    N = size(objVals, 1);
+    normObj = (objVals - repmat(fmin, N, 1)) ./ repmat((fmax - fmin) * 1.1, N, 1);
+    % 只剔除负值（不应出现的情况），对超出上界的解裁剪到边界而非直接删除
+    % 这样避免因少量解轻微越界而导致 HV 突然跌落
+    normObj(any(normObj < 0, 2), :) = [];
+    if isempty(normObj), hv = 0; return; end
+    normObj = min(normObj, 1.0);  % 裁剪到参考点边界，不删除
+
+    % 提取二维非支配前沿（O(n log n)）
+    normObj = sortrows(normObj, [1, 2]);  % 先按 f1 升序
+    n = size(normObj, 1);
+    keep = true(n, 1);
+    min_f2 = inf;
+    for i = 1:n
+        if normObj(i, 2) < min_f2
+            min_f2 = normObj(i, 2);
+        else
+            keep(i) = false;  % 被前面的点支配
+        end
+    end
+    nd = normObj(keep, :);  % 非支配前沿，已按 f1 升序
+
+    % 扫描线算法计算 2D HV（参考点 [1,1]）
+    % 每个非支配点贡献一个水平条带：
+    %   宽度 = RefPoint(1) - nd(i,1)
+    %   高度 = prev_f2 - nd(i,2)
+    hv = 0;
+    prev_f2 = 1.0;  % 参考点 f2 = 1.0
+    for i = 1:size(nd, 1)
+        if nd(i, 2) < prev_f2
+            hv = hv + (1.0 - nd(i, 1)) * (prev_f2 - nd(i, 2));
+            prev_f2 = nd(i, 2);
         end
     end
 end

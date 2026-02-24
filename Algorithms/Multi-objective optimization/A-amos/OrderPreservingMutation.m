@@ -1,18 +1,27 @@
-function offspring = OrderPreservingMutation(individual, m, varDim, n)
+function [offspring, dbgInfo] = OrderPreservingMutation(individual, m, varDim, n, explorationRate)
 % 保持顺序约束的变异操作
-% 实现三种变异方式：
+% 实现四种变异方式：
 % 1. 把某个无人机的飞行段中的某个商家移到最后
 % 2. 某段的某个客户点移到首位
 % 3. 移动0分隔符的位置（必须包含完整的商家-客户点对）
+% 4. 大步长：将完整商家-客户对从源段迁移到目标段（跨段移动）
 %
 % 输入:
-%   individual - 待变异的个体
-%   m - 无人机数量（段数）
-%   varDim - 变量维度
-%   n - 商家数量（用于确定必需的点：1到2*n）
+%   individual     - 待变异的个体
+%   m              - 无人机数量（段数）
+%   varDim         - 变量维度
+%   n              - 商家数量（用于确定必需的点：1到2*n）
+%   explorationRate - T4大步长变异的概率（默认0.25，停滞时传入更高值）
 %
 % 输出:
 %   offspring - 变异后的个体（保证：m-1个0分隔符，1-2*n每个值只出现一次，满足顺序约束）
+%   dbgInfo   - 调试信息结构体（strategy, cloneDefended）
+
+    if nargin < 5 || isempty(explorationRate)
+        explorationRate = 0.25;
+    end
+    dbgInfo.strategy      = 0;
+    dbgInfo.cloneDefended = false;
 
     % 确保输入维度正确
     if length(individual) ~= varDim
@@ -36,21 +45,24 @@ function offspring = OrderPreservingMutation(individual, m, varDim, n)
         segments{k} = individual(idx0_extended(k)+1 : idx0_extended(k+1)-1);
     end
     
-    % 随机选择一种变异方式
-    mutation_type = 2;
+    % 选择变异方式：以 explorationRate 概率执行大步长T4，其余均匀选策略1-3
+    % 停滞时外部传入更高的 explorationRate，提升大步长比例
+    if rand < explorationRate
+        mutation_type = 4;
+    else
+        mutation_type = randi(3);
+    end
     
+    dbgInfo.strategy = mutation_type;
     switch mutation_type
         case 1
-            % 方式1：把某个无人机的飞行段中的某个商家移到最前
             offspring = mutation_type1(individual, segments, idx0_extended, m, n);
-            
         case 2
-            % 方式2：某段的某个客户点移到最后
             offspring = mutation_type2(individual, segments, idx0_extended, m, n);
-            
         case 3
-            % 方式3：移动0分隔符的位置（必须包含完整的商家-客户点对）
             offspring = mutation_type3(individual, segments, idx0_extended, m, n, varDim);
+        case 4
+            offspring = mutation_type4_segSwap(individual, segments, m, n, varDim);
     end
     
     % 确保维度正确
@@ -89,6 +101,34 @@ function offspring = OrderPreservingMutation(individual, m, varDim, n)
                 offspring = [offspring, zeros(1, varDim - length(offspring))];
             else
                 offspring = offspring(1:varDim);
+            end
+        end
+    end
+    
+    % 若变异退化为克隆（子代与父代完全相同），升级为 type4 大步长扰动
+    if isequal(offspring, individual)
+        dbgInfo.cloneDefended = true;
+        offspring = mutation_type4_segSwap(individual, segments, m, n, varDim);
+        % 若 type4 也失败（单段问题等），做简单的段内随机对交换
+        if isequal(offspring, individual)
+            idx0 = find(individual == 0);
+            idx0_ext2 = [0, idx0, varDim+1];
+            for k = 1:m
+                seg = individual(idx0_ext2(k)+1 : idx0_ext2(k+1)-1);
+                merchants = seg(seg >= 1 & seg <= n);
+                if length(merchants) >= 2
+                    sw = randperm(length(merchants), 2);
+                    m1 = merchants(sw(1)); c1 = m1 + n;
+                    m2 = merchants(sw(2)); c2 = m2 + n;
+                    if any(seg == c1) && any(seg == c2)
+                        seg_stripped = seg(seg ~= m1 & seg ~= c1 & seg ~= m2 & seg ~= c2);
+                        new_seg = [seg_stripped, m1, c1, m2, c2];
+                        rebuilt = individual;
+                        rebuilt(idx0_ext2(k)+1 : idx0_ext2(k+1)-1) = new_seg(1:length(seg));
+                        offspring = rebuilt;
+                        break;
+                    end
+                end
             end
         end
     end
@@ -433,4 +473,77 @@ function is_complete = is_complete_pairs_segment(segment, n)
     end
     
     is_complete = true;
+end
+
+function offspring = mutation_type4_segSwap(individual, segments, m, n, varDim)
+% 大步长变异：从源段随机抽一个完整商家-客户对，移到目标段的随机位置
+% 这与 mutation_type3（移动分隔符）的区别在于：
+%   - mutation_type3 只移动 0，整对留在原段边界附近
+%   - mutation_type4 直接把整对从源段"剪切"到目标段任意插入点，步长更大
+
+    offspring = individual;  % 默认不变
+    
+    % 找有多于1对的源段（至少含2个商家-客户对）
+    srcCandidates = [];
+    for k = 1:m
+        seg = segments{k};
+        merchants = seg(seg >= 1 & seg <= n);
+        if length(merchants) >= 2
+            srcCandidates(end+1) = k;
+        end
+    end
+    if isempty(srcCandidates), return; end
+    
+    % 随机选源段
+    srcIdx = srcCandidates(randi(length(srcCandidates)));
+    srcSeg = segments{srcIdx};
+    srcMerchants = srcSeg(srcSeg >= 1 & srcSeg <= n);
+    
+    % 从源段随机选一个商家-客户对
+    chosenMerchant = srcMerchants(randi(length(srcMerchants)));
+    chosenCustomer = chosenMerchant + n;
+    
+    % 确保客户点也在源段中（顺序约束）
+    if ~any(srcSeg == chosenCustomer), return; end
+    
+    % 从源段移除商家和客户点，保持剩余元素相对顺序
+    newSrcSeg = srcSeg(srcSeg ~= chosenMerchant & srcSeg ~= chosenCustomer);
+    
+    % 随机选目标段（不同于源段）
+    dstOptions = setdiff(1:m, srcIdx);
+    if isempty(dstOptions), return; end
+    dstIdx = dstOptions(randi(length(dstOptions)));
+    dstSeg = segments{dstIdx};
+    
+    % 在目标段随机位置插入商家-客户对（商家在前，客户紧随）
+    % 插入点范围：0 表示插到最前，length(dstSeg) 表示插到最后
+    insertPos = randi(length(dstSeg) + 1) - 1;
+    newDstSeg = [dstSeg(1:insertPos), chosenMerchant, chosenCustomer, dstSeg(insertPos+1:end)];
+    
+    % 更新 segments，重新拼接
+    segments{srcIdx} = newSrcSeg;
+    segments{dstIdx} = newDstSeg;
+    
+    % 重建个体：段之间插入 0 分隔符
+    rebuilt = [];
+    for k = 1:m
+        rebuilt = [rebuilt, segments{k}];
+        if k < m
+            rebuilt = [rebuilt, 0];
+        end
+    end
+    
+    % 验证维度和内容
+    if length(rebuilt) ~= varDim, return; end
+    allRequired = 1:(2*n);
+    if ~isequal(sort(rebuilt(rebuilt ~= 0)), sort(allRequired)), return; end
+    
+    % 验证顺序约束（每个商家在其客户点之前）
+    for k = 1:n
+        posM = find(rebuilt == k, 1);
+        posC = find(rebuilt == k+n, 1);
+        if isempty(posM) || isempty(posC) || posM > posC, return; end
+    end
+    
+    offspring = rebuilt;
 end

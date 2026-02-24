@@ -1,4 +1,4 @@
-function offspring = SegmentBasedCrossover(parent1, parent2, n, m, varDim)
+function [offspring, dbgInfo] = SegmentBasedCrossover(parent1, parent2, n, m, varDim)
 % 基于三种策略的交叉入口：随机选用位置追踪 / 对优先级 / 顺序保持 之一
 % 保证：0 个数为 m-1，每段内商家-客户对完整，全局 1..2n 各出现一次，段内商家在客户前
 %
@@ -10,6 +10,9 @@ function offspring = SegmentBasedCrossover(parent1, parent2, n, m, varDim)
 %
 % 输出:
 %   offspring - 子代解（长度 varDim，恰好 m-1 个 0，完整 1..2n，段内不分割对）
+%   dbgInfo   - 调试信息结构体：.strategy(1/2/3) .cloneDefended(true/false)
+    dbgInfo.strategy = 0;
+    dbgInfo.cloneDefended = false;
 
     % 统一父代长度为 varDim（便于后续交叉与修复）
     if length(parent1) ~= varDim
@@ -38,17 +41,17 @@ function offspring = SegmentBasedCrossover(parent1, parent2, n, m, varDim)
     % 如果传入停滞信息（通过varDim的符号位或额外参数），调整权重
     % 这里简化：随机选择但增加探索性
     if rand < 0.4
-        % 40%概率使用位置追踪（探索性强）
         offspring = PositionTrackingCrossover(parent1, parent2, n, m, varDim);
         crossoverCounts(1) = crossoverCounts(1) + 1;
+        dbgInfo.strategy = 1;  % PTC
     elseif rand < 0.7
-        % 30%概率使用对优先级（平衡）
         offspring = PairPriorityCrossover(parent1, parent2, n, m, varDim);
         crossoverCounts(2) = crossoverCounts(2) + 1;
+        dbgInfo.strategy = 2;  % PPC
     else
-        % 30%概率使用顺序保持（保守）
         offspring = OrderPreservingCrossover(parent1, parent2, n, m, varDim);
         crossoverCounts(3) = crossoverCounts(3) + 1;
+        dbgInfo.strategy = 3;  % OPC
     end
 
     % 最终保证长度与 0 个数
@@ -59,8 +62,92 @@ function offspring = SegmentBasedCrossover(parent1, parent2, n, m, varDim)
             offspring = offspring(1:varDim);
         end
     end
-    % 确保首尾不为 0（0 仅作段间分隔，首尾必须是商家或客户点）
+    % 确保首尾不为 0
     offspring = SegmentBasedCrossover_ensureNoZeroAtEnds(offspring);
+    
+    % 若交叉退化为克隆（子代与任一父代完全相同），强制随机段间对迁移打破克隆
+    if isequal(offspring, parent1) || isequal(offspring, parent2)
+        offspring = SegmentBasedCrossover_forceDisrupt(offspring, n, m, varDim);
+        dbgInfo.cloneDefended = true;
+    end
+end
+
+function offspring = SegmentBasedCrossover_forceDisrupt(individual, n, m, varDim)
+% 强制扰动：当交叉退化为克隆时，随机选一对商家编号互换其所在段内位置
+% 保证顺序约束（商家在客户前），不改变 0 分隔符结构
+    offspring = individual;
+    idx0 = find(individual == 0);
+    if length(idx0) < 1, return; end
+    
+    idx0_ext = [0, idx0, varDim+1];
+    % 构建各段
+    segs = cell(m, 1);
+    for k = 1:m
+        segs{k} = individual(idx0_ext(k)+1 : idx0_ext(k+1)-1);
+    end
+    
+    % 找出含至少1个商家的段
+    validSegs = find(cellfun(@(s) any(s >= 1 & s <= n), segs));
+    if length(validSegs) < 2
+        % 只有一段有商家，在该段内做商家-客户对位置随机重排
+        if length(validSegs) == 1
+            k = validSegs(1);
+            seg = segs{k};
+            merchants = seg(seg >= 1 & seg <= n);
+            if length(merchants) >= 2
+                % 随机选两个商家-客户对并互换位置
+                idx_swap = randperm(length(merchants), 2);
+                m1 = merchants(idx_swap(1)); c1 = m1 + n;
+                m2 = merchants(idx_swap(2)); c2 = m2 + n;
+                % 从段中移除两对，随机重插
+                seg_stripped = seg(seg ~= m1 & seg ~= c1 & seg ~= m2 & seg ~= c2);
+                insert1 = randi(length(seg_stripped)+1) - 1;
+                seg_new = [seg_stripped(1:insert1), m2, c2, seg_stripped(insert1+1:end)];
+                insert2 = randi(length(seg_new)+1) - 1;
+                seg_new = [seg_new(1:insert2), m1, c1, seg_new(insert2+1:end)];
+                segs{k} = seg_new;
+            end
+        end
+    else
+        % 从两个不同段各取一个商家-客户对互换
+        k1 = validSegs(randi(length(validSegs)));
+        k2Opts = validSegs(validSegs ~= k1);
+        k2 = k2Opts(randi(length(k2Opts)));
+        
+        seg1 = segs{k1}; seg2 = segs{k2};
+        merchants1 = seg1(seg1 >= 1 & seg1 <= n);
+        merchants2 = seg2(seg2 >= 1 & seg2 <= n);
+        if isempty(merchants1) || isempty(merchants2), return; end
+        
+        m1 = merchants1(randi(length(merchants1))); c1 = m1 + n;
+        m2 = merchants2(randi(length(merchants2))); c2 = m2 + n;
+        
+        if ~any(seg1 == c1) || ~any(seg2 == c2), return; end
+        
+        % 从各自段移除选中对，插入对方的对
+        seg1_stripped = seg1(seg1 ~= m1 & seg1 ~= c1);
+        seg2_stripped = seg2(seg2 ~= m2 & seg2 ~= c2);
+        
+        ins1 = randi(length(seg1_stripped)+1) - 1;
+        segs{k1} = [seg1_stripped(1:ins1), m2, c2, seg1_stripped(ins1+1:end)];
+        ins2 = randi(length(seg2_stripped)+1) - 1;
+        segs{k2} = [seg2_stripped(1:ins2), m1, c1, seg2_stripped(ins2+1:end)];
+    end
+    
+    % 重建个体
+    rebuilt = [];
+    for k = 1:m
+        rebuilt = [rebuilt, segs{k}];
+        if k < m, rebuilt = [rebuilt, 0]; end
+    end
+    if length(rebuilt) ~= varDim, return; end
+    % 验证顺序约束
+    for k = 1:n
+        pm = find(rebuilt == k, 1);
+        pc = find(rebuilt == k+n, 1);
+        if isempty(pm) || isempty(pc) || pm > pc, return; end
+    end
+    offspring = rebuilt;
 end
 
 function offspring = PositionTrackingCrossover(parent1, parent2, n, m, varDim)
@@ -265,13 +352,20 @@ function offspring = OrderPreservingCrossover(parent1, parent2, n, m, varDim)
         return;
     end
     
-    % 3. 融合商家顺序：融合点前取自 order1，融合点后取自 order2，再补全两边未出现的商家
+    % 3. 融合商家顺序：融合点前取自 order1，融合点后取自 order2
     fusion_point = randi(length(order1));
     fused_order = [order1(1:fusion_point), order2(fusion_point+1:end)];
     fused_order = unique(fused_order, 'stable');
-    % 补全：确保 1..n 的商家都出现（从两个父代顺序中补缺失）
+    % 补全：确保 1..n 的商家都出现
     all_merchants = unique([order1, order2]);
     fused_order = [fused_order, setdiff(all_merchants, fused_order)];
+    % 若融合后与 parent1 商家顺序完全相同（双亲退化），随机置换两个商家位置引入扰动
+    if isequal(fused_order, order1)
+        if length(fused_order) >= 2
+            swapPos = randperm(length(fused_order), 2);
+            fused_order([swapPos(1), swapPos(2)]) = fused_order([swapPos(2), swapPos(1)]);
+        end
+    end
     
     % 4. 构建子代（使用 varDim 保证长度，0 的个数由 repairSolution 统一）
     len = varDim;
