@@ -39,7 +39,7 @@ classdef A_amos_noAdapt < ALGORITHM
            %% 局部最优避免机制：停滞检测与自适应参数
            hvHistory = [];          % 记录历史超体积（HV）值，越大越好
            stagnationCounter = 0;   % 停滞计数器
-           stagnationThreshold = 20;% 停滞阈值（连续20代HV无显著增长）
+           stagnationThreshold = 40;% 停滞阈值（与 A_amos 一致，仅注释块内使用）
            adaptivePm = pm;         % 自适应变异概率
            adaptivePc = pc;         % 自适应交叉概率
            restartInterval = 50;    % 重启间隔（每50代检查一次）
@@ -57,8 +57,7 @@ classdef A_amos_noAdapt < ALGORITHM
                gen = gen + 1;
                
               %% 停滞检测与自适应参数调整（消融：关闭，固定使用 pc/pm）
-              % [消融-无自适应] 不再根据 HV 历史更新 stagnationCounter、adaptivePm、adaptivePc
-              % adaptivePm / adaptivePc 保持初始值 pm、pc；stagnationCounter 恒为 0
+              % [消融-无自适应] 下面为 A_amos 的自适应逻辑，此处注释掉；adaptivePm/adaptivePc 保持 pm/pc，stagnationCounter 恒为 0
               % if ~isempty(objVals) && size(objVals, 1) > 0
               %     validObj = objVals(objVals(:,1) < 1e9, :);
               %     if ~isempty(validObj)
@@ -71,10 +70,10 @@ classdef A_amos_noAdapt < ALGORITHM
               %         if length(hvHistory) > stagnationThreshold
               %             recentHV = hvHistory(end-stagnationThreshold+1:end);
               %             improvement = (recentHV(end) - recentHV(1)) / (abs(recentHV(1)) + 1e-10);
-              %             if improvement < 0.01
+              %             if improvement < 0.025  % HV增长不足2.5%（温和化）
               %                 stagnationCounter = stagnationCounter + 1;
-              %                 adaptivePm = min(0.9, pm * (1 + stagnationCounter * 0.15));
-              %                 adaptivePc = max(0.4, pc * (1 - stagnationCounter * 0.08));
+              %                 adaptivePm = min(0.5, pm * (1 + stagnationCounter * 0.08));
+              %                 adaptivePc = min(0.95, pc * (1 + stagnationCounter * 0.02));  % 停滞时略升Pc（与 A_amos/noCluster 一致）
               %             else
               %                 stagnationCounter = max(0, stagnationCounter - 1);
               %                 adaptivePm = pm; adaptivePc = pc;
@@ -83,8 +82,8 @@ classdef A_amos_noAdapt < ALGORITHM
               %         if length(diversityHistory) > 10
               %             recentDiversity = mean(diversityHistory(end-9:end));
               %             if recentDiversity < 0.01
-              %                 adaptivePm = min(0.8, adaptivePm * 1.2);
-              %                 adaptivePc = max(0.5, adaptivePc * 0.9);
+              %                 adaptivePm = min(0.5, adaptivePm * 1.1);
+              %                 adaptivePc = min(0.95, adaptivePc * 1.05);  % 多样性低时略升Pc
               %             end
               %         end
               %     end
@@ -128,15 +127,21 @@ classdef A_amos_noAdapt < ALGORITHM
                        neigPop = pop(mark, :);
                        neigObj = objVals(mark, :);
                        
-                       % 从每个聚类随机选择一个个体加入到全局子种群
-                       pos = randsample(sum(mark), 1);
-                       globalClust = [globalClust; neigPop(pos, :)];
+                       % 从每个聚类取 f1 最小和 f2 最小的解加入全局池（若同一解则只加一次）
+                       [~, posF1] = min(neigObj(:, 1));
+                       [~, posF2] = min(neigObj(:, 2));
+                       globalClust = [globalClust; neigPop(posF1, :)];
+                       if posF2 ~= posF1
+                           globalClust = [globalClust; neigPop(posF2, :)];
+                       end
                        
                        if sum(mark) > 2
                            neigSet{i, 1} = {neigPop, neigObj};  % 存储邻域解和目标值
                        end
                    end
                end
+               % 方法一：全局父代从全种群选，保留聚类仅用于邻域内选，避免全局池过小、多人同父代
+               globalClust = pop;
                globalSize = size(globalClust, 1);
                
              %% 个体进化

@@ -18,15 +18,15 @@
 % =====================================================================
 
 % --- 消融实验参数（修改此处）---
-numRuns       = 30;    % 独立运行次数（如 20 或 30）
-expName       = 'ablation';   % 实验基础名称，输出文件名会变为 <expName>_<算法名>
+numRuns       = 31;    % 独立运行次数（如 20 或 30）
+expName       = 'ablation05';   % 实验基础名称，输出文件名会变为 <expName>_<算法名>
 problem       = @planner_order_v3;
 % 算法：可写单个句柄，或 cell 数组依次运行多个（输出带算法标识）
-algorithm     = @A_amos;
-% algorithm     = {@A_amos, @A_amos_noCluster, @A_amos_noAdapt};  % 多算法示例
+% algorithm     = @A_amos;
+algorithm     = {@A_amos, @A_amos_noCluster, @A_amos_allBYJC};  % 多算法示例
 N             = 300;   % 种群规模（与 platemo 一致）
-maxFE         = 120000;
-saveInterval  = 20;    % platemo 保存间隔
+maxFE         = 180000;
+saveInterval  = 30;    % platemo 保存间隔
 M             = 2;     % 目标数
 plotLastRun   = false; % 是否在最后一轮画聚类散点图
 % --- 可选：切换距离模式 ---

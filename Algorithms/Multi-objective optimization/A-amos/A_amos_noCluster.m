@@ -7,7 +7,7 @@ classdef A_amos_noCluster < ALGORITHM
 % BETA --- 0.8 --- 邻域选择平衡参数
 % pc --- 0.9 --- 交叉概率（保持高交叉率以充分利用大种群）
 % pm --- 0.2 --- 变异概率（适度增加以提高探索能力）
-% maxgen --- 400 --- 最大迭代次数（增加迭代以充分利用大种群）
+% maxgen --- 300 --- 最大迭代次数
 
     methods
         function main(Algorithm, Problem)
@@ -19,7 +19,7 @@ classdef A_amos_noCluster < ALGORITHM
            % - Kmax: 聚类数随种群增大而增加
            % - pc/pm: 保持较高的交叉概率，增加变异概率以提高多样性
            % - maxgen: 增加迭代次数以充分利用大种群
-           [Kmax, BETA, pc, pm, maxgen] = Algorithm.ParameterSet(20, 0.8, 0.8, 0.3, 400);
+           [Kmax, BETA, pc, pm, maxgen] = Algorithm.ParameterSet(20, 0.8, 0.8, 0.3, 300);
            
            % 修复概率（降低以增加多样性，避免过度修复导致局部最优）
            repairProb = 0.6;  % 60%概率进行顺序约束修复
@@ -44,7 +44,7 @@ classdef A_amos_noCluster < ALGORITHM
            %% 局部最优避免机制：停滞检测与自适应参数
            hvHistory = [];          % 记录历史超体积（HV）值，越大越好
            stagnationCounter = 0;   % 停滞计数器
-           stagnationThreshold = 20;% 停滞阈值（连续20代HV无显著增长）
+           stagnationThreshold = 40;% 停滞阈值（连续40代HV无显著增长，温和化 30–50）
            adaptivePm = pm;         % 自适应变异概率
            adaptivePc = pc;         % 自适应交叉概率
            restartInterval = 50;    % 重启间隔（每50代检查一次）
@@ -61,61 +61,46 @@ classdef A_amos_noCluster < ALGORITHM
            while Algorithm.NotTerminated(Population)
                gen = gen + 1;
                
-              %% 停滞检测与自适应参数调整（基于超体积HV）
-              if ~isempty(objVals) && size(objVals, 1) > 0
-                % fprintf('开始停滞检测与自适应参数调整\n');
-                  validObj = objVals(objVals(:,1) < 1e9, :);
-                  if ~isempty(validObj)
-                      % 计算当前种群的超体积（HV越大越好）
-                      currentHV = compute_hv_2d(validObj);
-                      hvHistory = [hvHistory, currentHV];
-                      % [诊断] 每代输出有效解数量、f1/f2范围和HV
-                      if mod(gen, 1) == 0
-                          f1vals = validObj(:,1); f2vals = validObj(:,2);
-                          % fprintf('[Gen %3d] 有效解: %d/%d  f1=[%.0f,%.0f]  f2=[%.0f,%.0f]  HV=%.6f\n', ...
-                          %     gen, size(validObj,1), size(objVals,1), ...
-                          %     min(f1vals), max(f1vals), min(f2vals), max(f2vals), currentHV);
-                      end
-                      
-                      % 计算多样性（目标空间的分散度，用于补充判断）
-                      if size(validObj, 1) > 1
-                          diversity = mean(std(validObj, 0, 1)) / (mean(mean(validObj)) + 1e-10);
-                          diversityHistory = [diversityHistory, diversity];
-                      end
-                      
-                     % 检测停滞：最近stagnationThreshold代HV无显著增长
-                     if length(hvHistory) > stagnationThreshold
-                         recentHV = hvHistory(end-stagnationThreshold+1:end);
-                         improvement = (recentHV(end) - recentHV(1)) / (abs(recentHV(1)) + 1e-10);
-                         if improvement < 0.01  % HV增长不足1%
-                             stagnationCounter = stagnationCounter + 1;
-                             adaptivePm = min(0.9, pm * (1 + stagnationCounter * 0.15));
-                             adaptivePc = max(0.4, pc * (1 - stagnationCounter * 0.08));
-                             if mod(gen, 20) == 0
-                                 fprintf('[Gen %3d] 停滞(计数=%d): HV=%.4f, 增长=%.4f%%, Pm=%.3f, Pc=%.3f\n', ...
-                                     gen, stagnationCounter, currentHV, improvement*100, adaptivePm, adaptivePc);
-                             end
-                         else
-                             stagnationCounter = max(0, stagnationCounter - 1);
-                             adaptivePm = pm;
-                             adaptivePc = pc;
-                         end
-                     end
-                     
-                     % 多样性过低时额外增加探索
-                     if length(diversityHistory) > 10
-                         recentDiversity = mean(diversityHistory(end-9:end));
-                         if recentDiversity < 0.01
-                             adaptivePm = min(0.8, adaptivePm * 1.2);
-                             adaptivePc = max(0.5, adaptivePc * 0.9);
-                             if mod(gen, 20) == 0
-                                 fprintf('[Gen %3d] 多样性过低: diversity=%.6f, Pm=%.3f, Pc=%.3f\n', ...
-                                     gen, recentDiversity, adaptivePm, adaptivePc);
-                             end
-                         end
-                     end
-                  end
-              end
+              %% 停滞检测与自适应参数调整（基于超体积HV）— 已注释，与 A_amos 一致禁用自适应停滞
+              % if ~isempty(objVals) && size(objVals, 1) > 0
+              %     validObj = objVals(objVals(:,1) < 1e9, :);
+              %     if ~isempty(validObj)
+              %         currentHV = compute_hv_2d(validObj);
+              %         hvHistory = [hvHistory, currentHV];
+              %         if size(validObj, 1) > 1
+              %             diversity = mean(std(validObj, 0, 1)) / (mean(mean(validObj)) + 1e-10);
+              %             diversityHistory = [diversityHistory, diversity];
+              %         end
+              %         if length(hvHistory) > stagnationThreshold
+              %             recentHV = hvHistory(end-stagnationThreshold+1:end);
+              %             improvement = (recentHV(end) - recentHV(1)) / (abs(recentHV(1)) + 1e-10);
+              %             if improvement < 0.025
+              %                 stagnationCounter = stagnationCounter + 1;
+              %                 adaptivePm = min(0.5, pm * (1 + stagnationCounter * 0.08));
+              %                 adaptivePc = min(0.95, pc * (1 + stagnationCounter * 0.02));
+              %                 if mod(gen, 20) == 0
+              %                     fprintf('[Gen %3d] 停滞(计数=%d): HV=%.4f, 增长=%.4f%%, Pm=%.3f, Pc=%.3f\n', ...
+              %                         gen, stagnationCounter, currentHV, improvement*100, adaptivePm, adaptivePc);
+              %                 end
+              %             else
+              %                 stagnationCounter = max(0, stagnationCounter - 1);
+              %                 adaptivePm = pm;
+              %                 adaptivePc = pc;
+              %             end
+              %         end
+              %         if length(diversityHistory) > 10
+              %             recentDiversity = mean(diversityHistory(end-9:end));
+              %             if recentDiversity < 0.01
+              %                 adaptivePm = min(0.5, adaptivePm * 1.1);
+              %                 adaptivePc = min(0.95, adaptivePc * 1.05);
+              %                 if mod(gen, 20) == 0
+              %                     fprintf('[Gen %3d] 多样性过低: diversity=%.6f, Pm=%.3f, Pc=%.3f\n', ...
+              %                         gen, recentDiversity, adaptivePm, adaptivePc);
+              %                 end
+              %             end
+              %         end
+              %     end
+              % end
                
                %% 随机重启机制（恢复有效性：一次性替换10%，打破局部最优）
                % 注意：重启时的新解会通过Initialization评估，但这是必要的
@@ -134,27 +119,32 @@ classdef A_amos_noCluster < ALGORITHM
                %     end
                % end
                
-               %% 目标空间聚类管理（消融：关闭聚类，父代均从全种群随机选取）
+               %% 目标空间聚类管理（消融：仅注释聚类逻辑，父代均从全种群选，其余与 A_amos 一致）
                auxPop = [];
-               % [消融-无聚类] 不再按聚类构建邻域与全局代表集，直接使用全种群作为父代池
-               % globalClust = []; nClust = size(clustName, 1); neigSet = cell(nClust, 1);
-               % for i = 1:nClust
-               %     mark = clustTag == clustName(i);
-               %     if sum(mark) > 0
-               %         neigPop = pop(mark, :); neigObj = objVals(mark, :);
-               %         pos = randsample(sum(mark), 1);
-               %         globalClust = [globalClust; neigPop(pos, :)];
-               %         if sum(mark) > 2, neigSet{i, 1} = {neigPop, neigObj}; end
-               %     end
-               % end
-               globalClust = pop;   % 消融：全局池=全种群
-               globalSize = size(globalClust, 1);
-               neigSet = cell(size(clustName, 1), 1);  % 保持变量存在，但不使用（邻域恒空）
+               globalClust = [];
+               nClust = size(clustName, 1);
+               neigSet = cell(nClust, 1);
                
                % 确保pop和objVals不为空
                if isempty(pop) || isempty(objVals)
-                   continue;  % 如果种群为空，跳过本次迭代
+                   continue;
                end
+               
+               % [消融-无聚类] 以下聚类构建循环已注释，与 A_amos 仅差在是否执行该循环
+               % for i = 1:nClust
+               %     if i > length(clustName), continue; end
+               %     mark = clustTag == clustName(i);
+               %     if sum(mark) > 0
+               %         neigPop = pop(mark, :); neigObj = objVals(mark, :);
+               %         [~, posF1] = min(neigObj(:, 1)); [~, posF2] = min(neigObj(:, 2));
+               %         globalClust = [globalClust; neigPop(posF1, :)];
+               %         if posF2 ~= posF1, globalClust = [globalClust; neigPop(posF2, :)]; end
+               %         if sum(mark) > 2, neigSet{i, 1} = {neigPop, neigObj}; end
+               %     end
+               % end
+               % 方法一：全局父代从全种群选（消融版不建聚类，直接全种群）
+               globalClust = pop;
+               globalSize = size(globalClust, 1);
                
              %% 个体进化
              % [算子调试计数器] 每代重置
@@ -205,69 +195,39 @@ classdef A_amos_noCluster < ALGORITHM
                    end
                    neigSize = size(neighborhood, 1);
                    
-                   %% 父代选择策略：自适应平衡局部/全局搜索，避免局部最优
-                   % 当停滞时降低局部搜索概率，增加全局探索
-                   if stagnationCounter > 3
-                       adjustedBeta = BETA * 0.5;  % 停滞时降低局部搜索倾向
-                   else
-                       adjustedBeta = BETA;
-                   end
-                   localSearchProb = adjustedBeta * gen / maxgen;  % 局部搜索概率（随代数增加）
-                   
-                   % 以概率选择从当前解的聚类还是全局选择
-                   if rand < localSearchProb && neigSize >= 1
-                       % 局部搜索：从当前解的聚类（邻域）中选择一个个体
-                       idx = randsample(neigSize, 1);
-                       parent = neighborhood(idx, :);
-                   elseif globalSize >= 1
-                       % 全局搜索：从全局聚类中选择一个个体
-                       idx = randsample(globalSize, 1);
-                       parent = globalClust(idx, :);
-                   else
-                       % 备用：使用当前解
-                       parent = currentSol;
-                   end
-                   
-                 %% 对选中的父代应用交叉和变异操作生成子代
-                 % 使用自适应概率
-                 useCrossover = rand < adaptivePc;
-                 useMutation = rand < adaptivePm;
-                 % 停滞越严重，T4大步长变异比例越高（上限0.7），避免细粒度策略在收敛种群上空转
+                   %% 消融对比2：父代选择=交叉用当前+全局随机，变异用当前个体；算子与主算法一致为二选一，概率固定 0.5
+                   % [已注释] 按迭代调节概率：genRatio = gen/maxgen; crossoverProb = max(0, pc*(1-genRatio)); ...
+                 % genRatio       = gen / maxgen;
+                 % crossoverProb  = max(0, pc * (1 - genRatio));
+                 % mutationProb   = max(0.4, 1 - crossoverProb);
+                 crossoverProb  = 0.5;
+                 useCrossover   = rand < crossoverProb;
                  explorationRate = min(0.70, 0.25 + stagnationCounter * 0.02);
                   
-                 % 首先应用交叉操作
-                 if useCrossover && globalSize >= 1
-                     % parent2 选取策略：70%从全种群随机选（保证多样性），30%从全局代表集选
-                     % 特别规定：parent2 不能等于 parent（避免自交叉产生克隆）
-                     maxTry = 5;
-                     parent2 = parent;
-                     for tryIdx = 1:maxTry
-                         if rand < 0.7 && popSize > 1
-                             idx2 = randi(popSize);
-                             parent2 = pop(idx2, :);
-                         else
-                             idx2 = randsample(globalSize, 1);
-                             parent2 = globalClust(idx2, :);
-                         end
-                         if ~isequal(parent, parent2), break; end
+                 % 交叉：当前个体 + 另一个体；变异：仅当前个体（无聚类时无“类中”）
+                 if useCrossover && popSize >= 2
+                     parent = currentSol;
+                     % 消融-无聚类：无不同类，parent2 从除自身外任意个体选
+                     otherIdx = setdiff(1:popSize, i);
+                     idx2 = otherIdx(randsample(length(otherIdx), 1));
+                     parent2 = pop(idx2, :);
+                     if isequal(parent2, currentSol) && length(otherIdx) > 1
+                         idx2 = otherIdx(randsample(length(otherIdx), 1));
+                         parent2 = pop(idx2, :);
                      end
-                     
-                    % 三种交叉之一：位置追踪 / 对优先级 / 顺序保持（内部随机选择）
-                    [trialSol, crossDbg] = SegmentBasedCrossover(parent, parent2, n, m, varDim);
-                    % 统计各策略调用次数和克隆防御
-                    if crossDbg.strategy == 1, dbg_cross_ptc = dbg_cross_ptc + 1;
-                    elseif crossDbg.strategy == 2, dbg_cross_ppc = dbg_cross_ppc + 1;
-                    else, dbg_cross_opc = dbg_cross_opc + 1; end
-                    if crossDbg.cloneDefended, dbg_cross_def = dbg_cross_def + 1; end
-                     
+                     [trialSol, crossDbg] = SegmentBasedCrossover(parent, parent2, n, m, varDim);
+                     if crossDbg.strategy == 1, dbg_cross_ptc = dbg_cross_ptc + 1;
+                     elseif crossDbg.strategy == 2, dbg_cross_ppc = dbg_cross_ppc + 1;
+                     else, dbg_cross_opc = dbg_cross_opc + 1; end
+                     if crossDbg.cloneDefended, dbg_cross_def = dbg_cross_def + 1; end
                      if length(trialSol) ~= varDim
                          trialSol = [trialSol, zeros(1, max(0, varDim - length(trialSol)))];
                          trialSol = trialSol(1:varDim);
                      end
                  else
-                     % 直接应用变异操作（传入动态explorationRate，停滞时增大T4比例）
+                     % 变异：无聚类时只用当前个体
+                     parent = currentSol;
                      [trialSol, mutDbg] = OrderPreservingMutation(parent, m, varDim, n, explorationRate);
-                     % 统计各策略调用次数和克隆防御
                      if mutDbg.strategy == 1, dbg_mut_t1 = dbg_mut_t1 + 1;
                      elseif mutDbg.strategy == 2, dbg_mut_t2 = dbg_mut_t2 + 1;
                      elseif mutDbg.strategy == 3, dbg_mut_t3 = dbg_mut_t3 + 1;
@@ -275,38 +235,38 @@ classdef A_amos_noCluster < ALGORITHM
                      if mutDbg.cloneDefended, dbg_mut_def = dbg_mut_def + 1; end
                  end
                    
-                   % 增强探索性操作：避免局部最优
-                   % 1. 当停滞时增加随机扰动（段交换）- 仅当两段均为完整对（偶数长度）时交换，避免产生 "0 0 18"
-                   if stagnationCounter > 2 && rand < 0.4
-                       idx0 = find(trialSol == 0);
-                       if length(idx0) >= 2
-                           segIdx = randperm(length(idx0)+1, 2);
-                           idx0_exp = [0, idx0, length(trialSol)+1];
-                           seg1_start = idx0_exp(segIdx(1)) + 1;
-                           seg1_end = idx0_exp(segIdx(1)+1) - 1;
-                           seg2_start = idx0_exp(segIdx(2)) + 1;
-                           seg2_end = idx0_exp(segIdx(2)+1) - 1;
-                           if seg1_end >= seg1_start && seg2_end >= seg2_start
-                               seg1 = trialSol(seg1_start:seg1_end);
-                               seg2 = trialSol(seg2_start:seg2_end);
-                               % 仅当两段长度相等且均为偶数（完整商家-客户对）时交换
-                               L1 = length(seg1); L2 = length(seg2);
-                               if L1 == L2 && mod(L1, 2) == 0
-                                   trialSol(seg1_start:seg1_end) = seg2;
-                                   trialSol(seg2_start:seg2_end) = seg1;
-                               end
-                           end
-                       end
-                   end
-                 % 2. 定期（每10代）对所有个体增加一次额外变异，打破局部最优
-                 if mod(gen, 10) == 0 && rand < 0.2
-                     [trialSol, mutDbg2] = OrderPreservingMutation(trialSol, m, varDim, n, explorationRate);
-                      if mutDbg2.strategy == 1, dbg_mut_t1 = dbg_mut_t1 + 1;
-                      elseif mutDbg2.strategy == 2, dbg_mut_t2 = dbg_mut_t2 + 1;
-                      elseif mutDbg2.strategy == 3, dbg_mut_t3 = dbg_mut_t3 + 1;
-                      else, dbg_mut_t4 = dbg_mut_t4 + 1; end
-                      if mutDbg2.cloneDefended, dbg_mut_def = dbg_mut_def + 1; end
-                  end
+                  % 增强探索性操作：避免局部最优
+                  % 1. 当停滞时增加随机扰动（段交换）- 仅当两段均为完整对（偶数长度）时交换，避免产生 "0 0 18"
+                  % if stagnationCounter > 2 && rand < 0.4
+                  %     idx0 = find(trialSol == 0);
+                  %     if length(idx0) >= 2
+                  %         segIdx = randperm(length(idx0)+1, 2);
+                  %         idx0_exp = [0, idx0, length(trialSol)+1];
+                  %         seg1_start = idx0_exp(segIdx(1)) + 1;
+                  %         seg1_end = idx0_exp(segIdx(1)+1) - 1;
+                  %         seg2_start = idx0_exp(segIdx(2)) + 1;
+                  %         seg2_end = idx0_exp(segIdx(2)+1) - 1;
+                  %         if seg1_end >= seg1_start && seg2_end >= seg2_start
+                  %             seg1 = trialSol(seg1_start:seg1_end);
+                  %             seg2 = trialSol(seg2_start:seg2_end);
+                  %             % 仅当两段长度相等且均为偶数（完整商家-客户对）时交换
+                  %             L1 = length(seg1); L2 = length(seg2);
+                  %             if L1 == L2 && mod(L1, 2) == 0
+                  %                 trialSol(seg1_start:seg1_end) = seg2;
+                  %                 trialSol(seg2_start:seg2_end) = seg1;
+                  %             end
+                  %         end
+                  %     end
+                  % end
+                % 2. 定期（每10代）对所有个体增加一次额外变异，打破局部最优（noCluster 中关闭该额外变异）
+                % if mod(gen, 10) == 0 && rand < 0.2
+                %     [trialSol, mutDbg2] = OrderPreservingMutation(trialSol, m, varDim, n, explorationRate);
+                %      if mutDbg2.strategy == 1, dbg_mut_t1 = dbg_mut_t1 + 1;
+                %      elseif mutDbg2.strategy == 2, dbg_mut_t2 = dbg_mut_t2 + 1;
+                %      elseif mutDbg2.strategy == 3, dbg_mut_t3 = dbg_mut_t3 + 1;
+                %      else, dbg_mut_t4 = dbg_mut_t4 + 1; end
+                %      if mutDbg2.cloneDefended, dbg_mut_def = dbg_mut_def + 1; end
+                % end
                    
                    % 统一段结构修复：确保每段均为完整商家-客户对（可两 0 相邻，但左右段必须完整）
                    trialSol = OrderSegmentRepair(trialSol, n, m, varDim);
