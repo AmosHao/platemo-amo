@@ -1,10 +1,12 @@
-function SpmdRun_all_TRAVEL_PRMO_class(problem,algorithm,N,maxFE,s,runTimes,workerNum,M,dots)
+function [timeAll,prob,qrob,wrob] = SpmdRun_all_TRAVEL_PRMO_class(problem,algorithm,N,maxFE,s,runTimes,workerNum,M,dots)
 
 % This script demonstrates using one EMO algorithm to compute
 % multiple problems.
 % runTimes=3;                     % The run times of each lab
 % workerNum=10;                    % The number of labs
-spmd
+spmd(workerNum)
+    seed = 1;
+    rng(seed + spmdIndex - 1,'twister'); % 每个 worker 用不同但可复现的随机流
  
     p = struct();% 创建一个空的结构体
     q = struct();
@@ -25,6 +27,7 @@ spmd
     % p.runplatemo.igdv_end = cell(runTimes, 1);
     p.runplatemo.ipd_end = cell(runTimes, 1);
     p.runplatemo.ihv_end = cell(runTimes, 1);
+    p.runplatemo.time    = zeros(runTimes, 1);
 
     w.clustName=cell(runTimes,1);
     w.clustTag=cell(runTimes,1);
@@ -32,9 +35,10 @@ spmd
     w.clustTag_end=cell(runTimes,1);
 
     for j=1:runTimes
-        
+        tStart = tic;
        [validtrait_end,validtrait,clustName,clustTag,clustName_end,clustTag_end,Dec,Obj,Dec_end,Obj_end,hv,hv_end,pd,pd_end]=runplatemo_all_singlepath_PRMO_class(problem,algorithm,N,maxFE,s,M,dots);
        % [Dec,Obj,Dec_end,Obj_end,hv,hv_end,pd,pd_end]=runplatemo_all_singlepath_PRMO(problem,algorithm,N,maxFE,s,M,dots);
+        p.runplatemo.time(j,1) = toc(tStart);
       
         % p.runplatemo.igdv(j,1)={igd};
         p.runplatemo.ipd(j,1)={pd};
@@ -93,6 +97,12 @@ prob=fun;
 qrob=qun;
 wrob=wun;
 
+% 汇总每个 worker 的运行时间：timeAll(worker, runIdx)
+timeAll = zeros(workerNum, runTimes);
+for i = 1:workerNum
+    timeAll(i,:) = p{i}.runplatemo.time(:).';
+end
+
 
 %maxGens=num2str(maxGens);
 
@@ -109,9 +119,15 @@ runT=num2str(runTimes*workerNum);
 % dot2=num2str(dot2);
 % save(['/media/haichao/9c7b702c-d542-4ac0-8f33-8aac10340a9e/haichao/Desktop/wanghaoyue1/PRMOcompare2/1/', ['_problem',probleminfo,'_algorithm',algorithminfo,'_N',N,'_maxFE',maxFE,'_runT',runT,'.mat']],'prob');
 % save(['/media/haichao/9c7b702c-d542-4ac0-8f33-8aac10340a9e/haichao/Desktop/wanghaoyue1/PRMOcompare2/2/', ['_problem',probleminfo,'_algorithm',algorithminfo,'_N',N,'_maxFE',maxFE,'_runT',runT,'.mat']],'qrob');
-save(['/home/haichao/Documents/why/wanghaoyue1/20260314OUPAcompare/1/', ['_algorithm',algorithminfo,'.mat']],'prob');
-save(['/home/haichao/Documents/why/wanghaoyue1/20260314OUPAcompare/2/', ['_algorithm',algorithminfo,'.mat']],'qrob');
-save(['/home/haichao/Documents/why/wanghaoyue1/20260314OUPAcompare/3/', ['_algorithm',algorithminfo,'.mat']],'wrob');
+% 仅当目标目录存在时才保存（避免在 Windows 下因路径不存在报错）
+out1 = 'D:\PlatEMO-master-using\CD_OCEMO\AAAAAleveo\20260318OUPAsimplehv50/4/';
+out2 = 'D:\PlatEMO-master-using\CD_OCEMO\AAAAAleveo\20260318OUPAsimplehv50/5/';
+out3 = 'D:\PlatEMO-master-using\CD_OCEMO\AAAAAleveo\20260318OUPAsimplehv50/6/';
+if isfolder(out1) && isfolder(out2) && isfolder(out3)
+    save([out1, ['_algorithm',algorithminfo,'.mat']],'prob');
+    save([out2, ['_algorithm',algorithminfo,'.mat']],'qrob');
+    save([out3, ['_algorithm',algorithminfo,'.mat']],'wrob');
+end
 % save(['/media/haichao/9c7b702c-d542-4ac0-8f33-8aac10340a9e/haichao/Desktop/wanghaoyue1/datafortravel/hangji_newdots/1/', ['_problem',probleminfo,'_algorithm',algorithminfo,'_N',N,'dot1',dot1,'dot2',dot2,'_maxFE',maxFE,'_runT',runT,'.mat']],'prob');
 % save(['/media/haichao/9c7b702c-d542-4ac0-8f33-8aac10340a9e/haichao/Desktop/wanghaoyue1/datafortravel/hangji_newdots/2/', ['_problem',probleminfo,'_algorithm',algorithminfo,'_N',N,'dot1',dot1,'dot2',dot2,'_maxFE',maxFE,'_runT',runT,'.mat']],'qrob');
 % save(['/media/haichao/9c7b702c-d542-4ac0-8f33-8aac10340a9e/haichao/Desktop/wanghaoyue1/datafortravel/hangji_newdots/3/', ['_problem',probleminfo,'_algorithm',algorithminfo,'_N',N,'dot1',dot1,'dot2',dot2,'_maxFE',maxFE,'_runT',runT,'.mat']],'wrob');

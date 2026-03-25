@@ -18,12 +18,13 @@ function score = PD(Population,~)
     if isempty(PopObj)
         score = nan;
     else
-        C = false(length(Population));
+        Npop = numel(Population);
+        C = false(Npop);
         C(logical(eye(size(C)))) = true;
         D = pdist2(Population.objs,Population.objs,'minkowski',0.1);
         D(logical(eye(size(D)))) = inf;
         score = 0;
-        for k = 1 : length(Population)-1
+        for k = 1 : Npop-1
             while true
                 [d,J] = min(D,[],2);
                 [~,i] = max(d);

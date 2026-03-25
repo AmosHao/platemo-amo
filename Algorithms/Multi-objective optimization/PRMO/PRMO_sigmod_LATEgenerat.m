@@ -1,4 +1,4 @@
-classdef PRMO_repair< ALGORITHM
+classdef PRMO_sigmod_LATEgenerat < ALGORITHM
 % <multi> <real/integer>
 % GOCEA
 % Kmax ---   11 --- The K
@@ -20,25 +20,25 @@ classdef PRMO_repair< ALGORITHM
            dots=Problem.dots;
             dot1=[dots(1,1),dots(1,2),dots(1,3)];
             dot2=[dots(1,4),dots(1,5),dots(1,6)];
-            %读取cubes数据
+            % 读取cubes数据
             %  % 文件名
-            % filename = 'city_environment_data_new14.xlsx';
-            % % 读取长方体数据
+            % filename = 'city_environment_data_new14_simple.xlsx';
+            % 读取长方体数据
             % buildings = xlsread(filename, 'Buildings');
             % numBuildings = size(buildings, 1);
-            % % 读取圆柱体数据
+            % 读取圆柱体数据
             % cylinders = xlsread(filename, 'Cylinders');
             % numCylinders = size(cylinders, 1);
-            % % 读取四棱锥数据
+            % 读取四棱锥数据
             % pyramids = xlsread(filename, 'Pyramids');
             % numPyramids = size(pyramids, 1);
-            % % 读取球体数据
+            % 读取球体数据
             % spheres = xlsread(filename, 'Spheres');
             % numSpheres = size(spheres, 1);
-            % % 读取禁飞区数据
+            % 读取禁飞区数据
             % jinfei = xlsread(filename, 'jinfei');
             % numjinfei = size(jinfei, 1);
-            %场景设置
+            % 场景设置
         buildings = load('buildings.mat').buildings;
         numBuildings = size(buildings, 1);
         % 读取圆柱体数据
@@ -99,8 +99,7 @@ classdef PRMO_repair< ALGORITHM
                end
                globalSize=size(globalClust,1);
                rowsToDelete=[];
-               rowsToDelete2=[];
-               rowsToDelete3=[];
+               useGuidedAvoidance = (gen/maxgen) > 0.5;  % 仅迭代中后期(gen/maxgen>0.5)才应用引导避障算子
 
                for i=1:popSize%遍历整个种群中的个体，为每个个体确定其邻居集合
                    currentSol=pop(i,:); currentTag=clustTag(i);
@@ -108,8 +107,6 @@ classdef PRMO_repair< ALGORITHM
                    if ~isempty(neighborhood)
                    [~,loc]=ismember(currentSol,neighborhood,'rows');neighborhood(loc,:)=[];% Determine the neighbouring solutions for the current solution
                    end %从邻域和全局类中删除当前个体
-                   % [~,loc]=ismember(currentSol,globalClust,'rows');globalClust(loc,:)=[];
-                   % globalSize=size(globalClust,1);
                    neigSize=size(neighborhood,1);
                    % Select the parents from the neighborhood or the global cluster
                    rnd=rand;
@@ -126,67 +123,56 @@ classdef PRMO_repair< ALGORITHM
                    idx=randsample(globalSize,2); parents(1:2,:)=globalClust(idx,:);
                    end
 
-                   
-                   % [validPoints]=checknode_singlepath_close(currentSol,varDim,buildings,numBuildings,cylinders,numCylinders,spheres,numSpheres,pyramids,numPyramids,jinfei,numjinfei);%对当前解包含的航迹点进行碰撞检测
-                   validPoints=a(i,:);
-                   if any(~validPoints)
-                   rowsToDelete = [rowsToDelete, i];
-                   zeroIndices = find(~validPoints);
-                   for ind=1:size(zeroIndices,2)
-                       index=zeroIndices(ind);
-                       trialSol1=currentSol;
-                       guide_indexs = find(a(:, index) == 1);
-                       % guide_indexs_next1 = find(a(:, index+1) == 1);
-                       % guide_indexs_next2 = find(a(:, index+1) == 1);
-                       if length(guide_indexs)>=1
-
-                       currentdot=[currentSol(:,index),currentSol(:,2*index),currentSol(:,3*index)];
-                       dis_guide = zeros(length(guide_indexs), 2);
-                       for gg=1:length(guide_indexs)
-                       dis_guide(gg,2)=norm([pop(gg,index),pop(gg,2*index),pop(gg,3*index)]-currentdot);
-                       dis_guide(gg,1)=guide_indexs(gg,1);
-                       end
-                       % 找到距离最小的点对应的 guide_index
-                        [~, min_dist_idx] = min(dis_guide(:, 2));
-                        guide_index = dis_guide(min_dist_idx, 1);
-
-                       % guide_index = guide_indexs(randi(length(guide_indexs)));
-                       pop_guide=pop(guide_index,:);
-                       trialSol1(:,index)=currentSol(:,index)+(pop_guide(:,index)-currentSol(:,index))*0.1;
-                       trialSol1(:,2*index)=currentSol(:,2*index)+(pop_guide(:,2*index)-currentSol(:,2*index))*0.1;
-                       trialSol1(:,3*index)=currentSol(:,3*index)+(pop_guide(:,3*index)-currentSol(:,3*index))*0.1;
-                       else
-                       random_number = rand()*1;
-                       trialSol1(:,index)=currentSol(:,index)+random_number;
-                       trialSol1(:,2*index)=currentSol(:,2*index)+random_number;
-                       trialSol1(:,3*index)=currentSol(:,3*index)+random_number;
-                       end
-                   end
-
-                   parents(3,:)=currentSol;
-                   trialSol2=DifferentialEvolutionCrossover(parents,bounds,F,CR); 
-                   trialSol2=PolynomialMutation(trialSol2,bounds,pm);
-
-                   trialSol=[trialSol1;trialSol2];
-
-                   auxPop=[auxPop;trialSol];
-
-                   else
                    parents(3,:)=currentSol;
                    trialSol=DifferentialEvolutionCrossover(parents,bounds,F,CR); 
                    trialSol=PolynomialMutation(trialSol,bounds,pm);
-                   auxPop=[auxPop;trialSol]; 
 
-                   end  
-
+                   if useGuidedAvoidance
+                       % 中后期：应用引导避障算子（有碰撞时生成 trialSol1+DE 两个子代）
+                       validPoints=a(i,:);
+                       if any(~validPoints)
+                           rowsToDelete = [rowsToDelete, i];
+                           zeroIndices = find(~validPoints);
+                           trialSol1=currentSol;
+                           for ind=1:size(zeroIndices,2)
+                               index=zeroIndices(ind);
+                               guide_indexs = find(a(:, index) == 1);
+                               if length(guide_indexs)>=1
+                                   currentdot=[currentSol(:,index),currentSol(:,2*index),currentSol(:,3*index)];
+                                   dis_guide = zeros(length(guide_indexs), 2);
+                                   for gg=1:length(guide_indexs)
+                                       gi = guide_indexs(gg);
+                                       dis_guide(gg,2)=norm([pop(gi,index),pop(gi,2*index),pop(gi,3*index)]-currentdot);
+                                       dis_guide(gg,1)=gi;
+                                   end
+                                   [~, min_dist_idx] = min(dis_guide(:, 2));
+                                   guide_index = dis_guide(min_dist_idx, 1);
+                                   pop_guide=pop(guide_index,:);
+                                   trialSol1(:,index)=currentSol(:,index)+(pop_guide(:,index)-currentSol(:,index))*0.1;
+                                   trialSol1(:,2*index)=currentSol(:,2*index)+(pop_guide(:,2*index)-currentSol(:,2*index))*0.1;
+                                   trialSol1(:,3*index)=currentSol(:,3*index)+(pop_guide(:,3*index)-currentSol(:,3*index))*0.1;
+                               else
+                                   random_number = rand()*1;
+                                   trialSol1(:,index)=currentSol(:,index)+random_number;
+                                   trialSol1(:,2*index)=currentSol(:,2*index)+random_number;
+                                   trialSol1(:,3*index)=currentSol(:,3*index)+random_number;
+                               end
+                           end
+                           auxPop=[auxPop;trialSol1;trialSol];
+                       else
+                           auxPop=[auxPop;trialSol];
+                       end
+                   else
+                       % 前期(gen/maxgen<=0.5)：与 PRMO_generate 一致，仅 DE，无引导避障
+                       auxPop=[auxPop;trialSol];
+                   end
                end
-               % trialVal=Problem.Evaluation(auxPop);
-               if size(rowsToDelete,2)~=size(pop,1)
-               pop(rowsToDelete, :)=[];
+               if useGuidedAvoidance && size(rowsToDelete,2)~=size(pop,1)
+                   pop(rowsToDelete, :)=[];
                end
-               % auxObjvs=trialVal.objs;
-               % [auxall,pop,objVals,clustTag,clustName,centroid]=GeOACES_hv_a(auxPop,auxObjvs,pop,objVals,clustTag,clustName,popSize,objDim,varDim,Kmax,trialVal,Population);
-               % Population=auxall;
+               % Population(:, rowsToDelete)=[];objVals(rowsToDelete, :)=[];clustTag(rowsToDelete, :)=[];
+               % pop(rowsToDelete3, :)=[];Population(:, rowsToDelete3)=[];objVals(rowsToDelete3, :)=[];clustTag(rowsToDelete3, :)=[];
+               % auxObjvs=auxVals.objs;
                selectedSize=Problem.N;
 
                [auxa,auxb,auxc,auxall,pop,objVals,clustTag,clustName,centroid]=GeOACESfortravel_singlepath_5(auxPop,pop,clustTag,clustName,selectedSize,objDim,varDim,Kmax,Problem,buildings,numBuildings,cylinders,numCylinders,spheres,numSpheres,pyramids,numPyramids,jinfei,numjinfei,dot1,dot2);
@@ -197,7 +183,8 @@ classdef PRMO_repair< ALGORITHM
                    Population(i).add_clustTag = clustTag(i,:);
                    Population(i).add_clustName = clustName(:,:);
                    Population(i).validtrait = auxb(i,:);
-                   % Population(i).bj = auxc(i,:);
+                   % Population(i).add = auxb(i,:);
+                   Population(i).bj = auxc(i,:);
 
                end
 

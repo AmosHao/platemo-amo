@@ -112,8 +112,11 @@ classdef simplePRMO< ALGORITHM
                    % globalSize=size(globalClust,1);
                    neigSize=size(neighborhood,1);
                    % Select the parents from the neighborhood or the global cluster
-                   rnd=rand;
-                   if rnd<BETA*gen/maxgen
+                  rnd=rand;
+                  t = gen; T = maxgen;
+                  beta = 1./(1 + exp(-10.*(t./T - 0.5))); % S 型递增
+                  th = min(1, max(0, BETA*beta));
+                  if rnd < th
                        if neigSize>1
                            idx=randsample(neigSize,2); parents(1:2,:)=neighborhood(idx,:); 
                        else

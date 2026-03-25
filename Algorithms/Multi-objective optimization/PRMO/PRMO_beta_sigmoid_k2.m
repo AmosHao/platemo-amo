@@ -1,4 +1,4 @@
-classdef PRMO_repair< ALGORITHM
+classdef PRMO_beta_sigmoid_k2 < ALGORITHM
 % <multi> <real/integer>
 % GOCEA
 % Kmax ---   11 --- The K
@@ -20,25 +20,25 @@ classdef PRMO_repair< ALGORITHM
            dots=Problem.dots;
             dot1=[dots(1,1),dots(1,2),dots(1,3)];
             dot2=[dots(1,4),dots(1,5),dots(1,6)];
-            %读取cubes数据
+            % 读取cubes数据
             %  % 文件名
-            % filename = 'city_environment_data_new14.xlsx';
-            % % 读取长方体数据
+            % filename = 'city_environment_data_new14_simple.xlsx';
+            % 读取长方体数据
             % buildings = xlsread(filename, 'Buildings');
             % numBuildings = size(buildings, 1);
-            % % 读取圆柱体数据
+            % 读取圆柱体数据
             % cylinders = xlsread(filename, 'Cylinders');
             % numCylinders = size(cylinders, 1);
-            % % 读取四棱锥数据
+            % 读取四棱锥数据
             % pyramids = xlsread(filename, 'Pyramids');
             % numPyramids = size(pyramids, 1);
-            % % 读取球体数据
+            % 读取球体数据
             % spheres = xlsread(filename, 'Spheres');
             % numSpheres = size(spheres, 1);
-            % % 读取禁飞区数据
+            % 读取禁飞区数据
             % jinfei = xlsread(filename, 'jinfei');
             % numjinfei = size(jinfei, 1);
-            %场景设置
+            % 场景设置
         buildings = load('buildings.mat').buildings;
         numBuildings = size(buildings, 1);
         % 读取圆柱体数据
@@ -114,7 +114,7 @@ classdef PRMO_repair< ALGORITHM
                    % Select the parents from the neighborhood or the global cluster
                    rnd=rand;
                    t = gen; T = maxgen;
-                   beta = 1./(1 + exp(-10.*(t./T - 0.5))); % S 型递增
+                   beta = 1./(1 + exp(-2.*(t./T - 0.5))); % S 型递增, k=2
                    th = min(1, max(0, BETA*beta));
                    if rnd < th
                        if neigSize>1
@@ -178,15 +178,15 @@ classdef PRMO_repair< ALGORITHM
                    auxPop=[auxPop;trialSol]; 
 
                    end  
-
+                  
                end
-               % trialVal=Problem.Evaluation(auxPop);
+               % rowsToDelete3=[rowsToDelete,rowsToDelete2];
                if size(rowsToDelete,2)~=size(pop,1)
                pop(rowsToDelete, :)=[];
                end
-               % auxObjvs=trialVal.objs;
-               % [auxall,pop,objVals,clustTag,clustName,centroid]=GeOACES_hv_a(auxPop,auxObjvs,pop,objVals,clustTag,clustName,popSize,objDim,varDim,Kmax,trialVal,Population);
-               % Population=auxall;
+               % Population(:, rowsToDelete)=[];objVals(rowsToDelete, :)=[];clustTag(rowsToDelete, :)=[];
+               % pop(rowsToDelete3, :)=[];Population(:, rowsToDelete3)=[];objVals(rowsToDelete3, :)=[];clustTag(rowsToDelete3, :)=[];
+               % auxObjvs=auxVals.objs;
                selectedSize=Problem.N;
 
                [auxa,auxb,auxc,auxall,pop,objVals,clustTag,clustName,centroid]=GeOACESfortravel_singlepath_5(auxPop,pop,clustTag,clustName,selectedSize,objDim,varDim,Kmax,Problem,buildings,numBuildings,cylinders,numCylinders,spheres,numSpheres,pyramids,numPyramids,jinfei,numjinfei,dot1,dot2);
@@ -197,7 +197,8 @@ classdef PRMO_repair< ALGORITHM
                    Population(i).add_clustTag = clustTag(i,:);
                    Population(i).add_clustName = clustName(:,:);
                    Population(i).validtrait = auxb(i,:);
-                   % Population(i).bj = auxc(i,:);
+                   % Population(i).add = auxb(i,:);
+                   Population(i).bj = auxc(i,:);
 
                end
 

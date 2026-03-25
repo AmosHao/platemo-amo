@@ -135,9 +135,9 @@ classdef PROBLEM < handle & matlab.mixin.Heterogeneous
             if ~isempty(Type{4})        % Binary variables
                 PopDec(:,Type{4}) = logical(randi([0,1],N,length(Type{4})));
             end
-            % if ~isempty(Type{5})        % Permutation variables
-            %     [~,PopDec(:,Type{5})] = sort(rand(N,length(Type{5})),2);%根据编码类型初始化决策变量
-            % end
+            if ~isempty(Type{5})        % Permutation variables
+                [~,PopDec(:,Type{5})] = sort(rand(N,length(Type{5})),2);%根据编码类型初始化决策变量
+            end
 %%%%%%%%%%forv%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % if ~isempty(Type{1})        % Real variables
 %     % 生成随机数
@@ -193,56 +193,56 @@ classdef PROBLEM < handle & matlab.mixin.Heterogeneous
 %%%%%%%%%%%%%%%forv%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%work1%%%%%%%%%%%%%
-% if ~isempty(Type{1})        % Real variables
-%     % 生成随机数
-%     randomValues = unifrnd(repmat(obj.lower(Type{1}), N, 1), repmat(obj.upper(Type{1}), N, 1));
-%     n_dots=obj.D/3;
-%     disx=obj.upper(1,1)-obj.lower(1,1);
-%     disy=obj.upper(1,n_dots+1)-obj.lower(1,n_dots+1);
-%     % 对每一组进行排序
-%     for i = 1:2
-%         startCol = (i-1)*n_dots + 1;
-%         endCol = i*n_dots;
-%         PopDec(:, startCol:endCol) = sort(randomValues(:, startCol:endCol), 2);
-%     end
-% % if disy>disx
-% %     PopDec(:, 1:n_dots) = randomValues(:, 1:n_dots);
-% %     % a=sort(randomValues(:, n_dots+1:2*n_dots), 2);
-% %     PopDec(:, n_dots+1:2*n_dots) = sort(randomValues(:, n_dots+1:2*n_dots), 2);
-% % end
-% % if disx>disy
-% %     PopDec(:, 1:n_dots) = sort(randomValues(:, 1:n_dots), 2);
-% %     % a=sort(randomValues(:, n_dots+1:2*n_dots), 2);
-% %     PopDec(:, n_dots+1:2*n_dots) = randomValues(:, n_dots+1:2*n_dots);
-% % end
-% dotss=obj.dots;
-% dot1=[dotss(1,1),dotss(1,2),dotss(1,3)];
-% dot2=[dotss(1,4),dotss(1,5),dotss(1,6)];
-% if dot1(1,1)>dot2(1,1)
-%     x=PopDec(:, 1:n_dots);
-%     PopDec(:, 1:n_dots) = x(:, end:-1:1);
+if ~isempty(Type{1})        % Real variables
+    % 生成随机数
+    randomValues = unifrnd(repmat(obj.lower(Type{1}), N, 1), repmat(obj.upper(Type{1}), N, 1));
+    n_dots=obj.D/3;
+    disx=obj.upper(1,1)-obj.lower(1,1);
+    disy=obj.upper(1,n_dots+1)-obj.lower(1,n_dots+1);
+    % 对每一组进行排序
+    for i = 1:2
+        startCol = (i-1)*n_dots + 1;
+        endCol = i*n_dots;
+        PopDec(:, startCol:endCol) = sort(randomValues(:, startCol:endCol), 2);
+    end
+% if disy>disx
+%     PopDec(:, 1:n_dots) = randomValues(:, 1:n_dots);
+%     % a=sort(randomValues(:, n_dots+1:2*n_dots), 2);
+%     PopDec(:, n_dots+1:2*n_dots) = sort(randomValues(:, n_dots+1:2*n_dots), 2);
 % end
-% if dot1(1,2)>dot2(1,2)
-%     y=PopDec(:, n_dots+1:2*n_dots);
-%     PopDec(:, n_dots+1:2*n_dots) = y(:, end:-1:1);
+% if disx>disy
+%     PopDec(:, 1:n_dots) = sort(randomValues(:, 1:n_dots), 2);
+%     % a=sort(randomValues(:, n_dots+1:2*n_dots), 2);
+%     PopDec(:, n_dots+1:2*n_dots) = randomValues(:, n_dots+1:2*n_dots);
 % end
-%     % PopDec(:,2*n_dots+1:3*n_dots)=800;
-%     PopDec(:,2*n_dots+1:3*n_dots) = randomValues(:,2*n_dots+1:3*n_dots);
+dotss=obj.dots;
+dot1=[dotss(1,1),dotss(1,2),dotss(1,3)];
+dot2=[dotss(1,4),dotss(1,5),dotss(1,6)];
+if dot1(1,1)>dot2(1,1)
+    x=PopDec(:, 1:n_dots);
+    PopDec(:, 1:n_dots) = x(:, end:-1:1);
+end
+if dot1(1,2)>dot2(1,2)
+    y=PopDec(:, n_dots+1:2*n_dots);
+    PopDec(:, n_dots+1:2*n_dots) = y(:, end:-1:1);
+end
+    % PopDec(:,2*n_dots+1:3*n_dots)=800;
+    PopDec(:,2*n_dots+1:3*n_dots) = randomValues(:,2*n_dots+1:3*n_dots);
+end
+% % 创建图形窗口
+% figure;
+% hold on;
+% n_dots=size(PopDec,2)/3;
+% view(3);
+% axis equal;
+% for i=1:size(PopDec,1)
+% dec1=PopDec(i,1:n_dots);
+% dec2=PopDec(i,n_dots+1:2*n_dots);
+% dec3=PopDec(i,2*n_dots+1:3*n_dots);
+% plot3(dec1,dec2,dec3,'bo','MarkerSize',3,'MarkerFaceColor','g');
+% hold on;
 % end
-% % % 创建图形窗口
-% % figure;
-% % hold on;
-% % n_dots=size(PopDec,2)/3;
-% % view(3);
-% % axis equal;
-% % for i=1:size(PopDec,1)
-% % dec1=PopDec(i,1:n_dots);
-% % dec2=PopDec(i,n_dots+1:2*n_dots);
-% % dec3=PopDec(i,2*n_dots+1:3*n_dots);
-% % plot3(dec1,dec2,dec3,'bo','MarkerSize',3,'MarkerFaceColor','g');
-% % hold on;
-% % end
-% % hold on;
+% hold on;
 %%%%%%%%%%%%%%%%
 %%%%%%%%%%%work1%%%%%%%%%%%%%%%%%
 
@@ -308,38 +308,38 @@ classdef PROBLEM < handle & matlab.mixin.Heterogeneous
 %%%%%%%%%%%%%%%forOrder 5 %%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%%%%%forOrder NEW%%%%%%%%%%%%%%%%%%%%
-% 初始化 PopDec 矩阵
-if ~isempty(Type{5}) 
-    m = obj.m;
-    n = obj.n;
-% 初始化 PopDec 矩阵
-PopDec = NaN(N, n + m - 1); % 每行的长度为 n + m - 1，因为有 n 个客户点和 m-1 个 0
-
-% 遍历每一行
-for i = 1:N
-    % 随机生成 1 到 n 的排列
-    perm = randperm(n);
-    
-    % 随机选择 m-1 个数的位置，确保这些位置不是最后一个，并且索引不能相邻
-    positions = randperm(n - 1, m - 1); % 随机选择 m-1 个位置，范围是 [1, n-1]
-    positions = sort(positions); % 对位置进行排序
-    while any(diff(positions) == 1) % 检查是否有相邻的索引
-        positions = randperm(n - 1, m - 1); % 重新选择位置
-        positions = sort(positions); % 对位置进行排序
-    end
-    
-    % 在选择的位置后面添加 0
-    for j = 1:length(positions)
-        perm = [perm(1:positions(j)), 0, perm(positions(j)+1:end)]; % 在 positions(j) 后面添加 0
-    end
-    
-    % 将结果存储到 PopDec 矩阵中
-    PopDec(i, :) = perm;
-end
-end
-
-% 输出结果
-% disp(PopDec);
+% % 初始化 PopDec 矩阵
+% if ~isempty(Type{5}) 
+%     m = obj.m;
+%     n = obj.n;
+% % 初始化 PopDec 矩阵
+% PopDec = NaN(N, n + m - 1); % 每行的长度为 n + m - 1，因为有 n 个客户点和 m-1 个 0
+% 
+% % 遍历每一行
+% for i = 1:N
+%     % 随机生成 1 到 n 的排列
+%     perm = randperm(n);
+% 
+%     % 随机选择 m-1 个数的位置，确保这些位置不是最后一个，并且索引不能相邻
+%     positions = randperm(n - 1, m - 1); % 随机选择 m-1 个位置，范围是 [1, n-1]
+%     positions = sort(positions); % 对位置进行排序
+%     while any(diff(positions) == 1) % 检查是否有相邻的索引
+%         positions = randperm(n - 1, m - 1); % 重新选择位置
+%         positions = sort(positions); % 对位置进行排序
+%     end
+% 
+%     % 在选择的位置后面添加 0
+%     for j = 1:length(positions)
+%         perm = [perm(1:positions(j)), 0, perm(positions(j)+1:end)]; % 在 positions(j) 后面添加 0
+%     end
+% 
+%     % 将结果存储到 PopDec 矩阵中
+%     PopDec(i, :) = perm;
+% end
+% end
+% 
+% % 输出结果
+% % disp(PopDec);
 
 %%%%%%%%%%%%%%forOrder NEW%%%%%%%%%%%%%%%%%%%%
             Population = obj.Evaluation(PopDec);
