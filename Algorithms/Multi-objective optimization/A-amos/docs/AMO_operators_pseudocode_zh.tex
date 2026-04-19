@@ -1,0 +1,272 @@
+% AMO 结构保持算子 — 中文版算法框架与伪代码
+% 推荐使用：xelatex AMO_operators_pseudocode_zh.tex
+% 依赖：algorithm2e、tikz、ctex
+\documentclass[a4paper]{ctexart}
+\usepackage{amsmath,amssymb,graphicx}
+\usepackage[ruled,vlined,linesnumbered]{algorithm2e}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning}
+\DontPrintSemicolon
+\SetAlgoCaptionSeparator{：}
+\SetKwInput{KwData}{输入}
+\SetKwInput{KwResult}{输出}
+\SetKwProg{Proc}{过程}{}{}
+\SetKwFunction{FEval}{批量评估}
+
+\newcommand{\zeros}{\text{zeros}}
+\newcommand{\varDim}{\text{varDim}}
+
+\begin{document}
+
+\title{AMO 结构保持算子：中文版算法框架与伪代码}
+\author{（依据 PlatEMO \texttt{A-amos} 实现整理）}
+\date{}
+\maketitle
+
+\noindent\textit{符号约定：染色体长度 $\varDim = 2n + m - 1$；基因 $1..n$ 为商家，$n{+}1..2n$ 为客户；共 $m{-}1$ 个分隔符 ``0''；每个商家 $s$ 必须出现在客户 $s{+}n$ 之前。}
+
+\noindent\textbf{种群初始化}不在 \texttt{OperatorAMO} 内完成。\linebreak PlatEMO 中由 \texttt{Problem.Initialization()} 生成初代（参见 \texttt{A\_amos.m}）。本文档侧重\textbf{遗传算子模块}。
+
+\clearpage
+\begin{figure}[htbp]
+\centering
+\scalebox{0.74}{%
+\begin{tikzpicture}[
+  scale=0.66, transform shape,
+  node distance=3mm and 5mm,
+  box/.style={rectangle, draw, rounded corners=2pt, align=center, inner sep=2.5pt, minimum width=2.45cm, font=\footnotesize},
+  small/.style={rectangle, draw, rounded corners=2pt, align=center, inner sep=2pt, font=\scriptsize},
+  arr/.style={-Latex, thick}
+]
+\node[box, fill=blue!6] (parse) {\textbf{1. 初始化/解析}\\$p_c,\mathrm{er},P_2$\\\texttt{varargin}};
+\node[box, right=6mm of parse, fill=blue!6] (prob) {\textbf{2. 问题规模}\\$n,m,\varDim$\\校验 $P_2$};
+\node[box, right=6mm of prob, fill=blue!6] (dec) {\textbf{3. 父代矩阵}\\\texttt{.decs}\\空则返回};
+\node[below=7mm of prob, box, minimum width=9.8cm, fill=green!5, text width=9.4cm] (loop)
+  {\textbf{4. $i=1..N$：}以 $p_c$ 在交叉/变异间选择；交叉调用 \textsc{SegmentBasedCrossover}，否则 \textsc{OrderPreservingMutation}；再 \textsc{OrderSegmentRepair}；对齐 $\varDim$；存第 $i$ 行。};
+\node[box, below=5mm of loop, fill=orange!8, minimum width=5.5cm, font=\footnotesize] (eval) {\textbf{5. 批量评估}\ $\FEval(\text{OffDec})\!\rightarrow\!\texttt{Offspring}$};
+\draw[arr] (parse) -- (prob);
+\draw[arr] (prob) -- (dec);
+\draw[arr] (prob) -- (loop);
+\draw[arr] (loop) -- (eval);
+\node[small, below left=4mm and 0mm of loop.south west, fill=yellow!12, text width=3.35cm] (cx)
+  {\textbf{交叉}\\$0.4{:}0.3{:}0.3$\\PTC/PPC/OPC};
+\node[small, below right=4mm and 0mm of loop.south east, fill=yellow!12, text width=3.35cm] (mut)
+  {\textbf{变异}\\$\Pr(\mathrm{T4}){=}\mathrm{er}$\\T1--T3 均分余概率};
+\draw[dashed, arr] (loop.south west) ++(0.2,0) |- (cx);
+\draw[dashed, arr] (loop.south east) ++(-0.2,0) |- (mut);
+\end{tikzpicture}%
+}
+\caption{\texttt{OperatorAMO} 整体框架（与 \texttt{OperatorAMO.m} 一致）：参数解析、问题字段、逐个体遗传操作、统一段修复与批量评估；侧框概括三种交叉与四种变异。}
+\label{fig:operator-amo-framework-zh}
+\end{figure}
+
+\clearpage
+\begin{algorithm}[htbp]
+\caption{\texttt{OperatorAMO}（1/2）初始化与输入，对应 \texttt{OperatorAMO.m} 前半段}
+\KwData{\texttt{Problem}，\texttt{Parents.decs}，\texttt{varargin}}
+\KwResult{规模 $n,m,\varDim$，矩阵 $\textit{ParentDec}$，$P_2^{dec}$，超参 $p_c,\mathrm{er}$；或空则直接返回}
+$p_c \gets 0.5$；$\mathrm{er} \gets 0.25$；$P_2 \gets \emptyset$；按键值对解析 \texttt{varargin} 更新 $p_c,\mathrm{er},P_2$（键名 \texttt{pc} / \texttt{er} / \texttt{p2} 等）\;
+$n,m,\varDim \gets \texttt{Problem.n},\texttt{Problem.m},\texttt{Problem.D}$；$\textit{ParentDec} \gets \texttt{Parents.decs}$\;
+\If{$\textit{ParentDec}$ 为空}{\Return $\FEval(\textit{ParentDec})$\;}
+$P_2^{dec} \gets$ 若 $P_2$ 非空则取其决策矩阵并校验与 $\textit{ParentDec}$ 同形，否则 $[]$\;
+\end{algorithm}
+
+\begin{algorithm}[htbp]
+\caption{\texttt{OperatorAMO}（2/2）逐个体生成子代并批量评估}
+\KwData{$\textit{ParentDec},P_2^{dec},n,m,\varDim,p_c,\mathrm{er}$}
+\KwResult{\texttt{Offspring}}
+$N \gets \mathrm{nrows}(\textit{ParentDec})$；$\textit{OffDec} \gets \mathbf{0}^{N \times \varDim}$\;
+\For{$i = 1$ \KwTo $N$}{
+  $p_1 \gets \textit{ParentDec}(i,:)$\;
+  \eIf{$\mathrm{rand}() < p_c$ \textbf{且} $N \geq 2$}{
+    $p_2 \gets$ 若 $P_2^{dec}\neq[]$ 则 $P_2^{dec}(i,:)$，否则在 $\textit{ParentDec}$ 中随机另取一行\;
+    $c \gets \textsc{SegmentBasedCrossover}(p_1,p_2,n,m,\varDim)$\;
+  }{$c \gets \textsc{OrderPreservingMutation}(p_1,m,\varDim,n,\mathrm{er})$\;}
+  $c \gets \textsc{OrderSegmentRepair}(c,n,m,\varDim)$；对齐长度 $\varDim$；$\textit{OffDec}(i,:)\gets c$\;
+}
+\Return $\FEval(\textit{OffDec})$\;
+\end{algorithm}
+
+\begin{algorithm}[htbp]
+\caption{分段交叉入口 \texttt{SegmentBasedCrossover}}
+\KwData{父代 $p_1,p_2$，规模 $n,m,\varDim$}
+\KwResult{子代 $c$}
+$r \gets \mathrm{rand}()$\;
+\uIf{$r < 0.4$}{
+  $c \gets \textsc{PositionTrackingCrossover}(\cdots)$ \tcp*{PTC 位置追踪}
+}
+\uElseIf{$r < 0.7$}{
+  $c \gets \textsc{PairPriorityCrossover}(\cdots)$ \tcp*{PPC 对优先级}
+}
+\Else{
+  $c \gets \textsc{OrderPreservingCrossover}(\cdots)$ \tcp*{OPC 顺序保持}
+}
+将 $c$ 对齐至 $\varDim$；去除首尾 $0$\;
+\If{$c = p_1$ \textbf{或} $c = p_2$}{
+  $c \gets \textsc{ForceDisrupt}(c,n,m,\varDim)$ \tcp*{打破克隆}
+}
+\Return $c$\;
+\end{algorithm}
+
+\begin{algorithm}[htbp]
+\caption{位置追踪交叉 PTC（\texttt{PositionTrackingCrossover}）}
+\KwData{合法父代 $p_1,p_2$}
+\KwResult{子代 $c$}
+建立基因 $1..2n$ 的位置映射 $\pi_1,\pi_2$\;
+$\mathcal{K} \gets \{ k : k$ 对 $\pi_1,\pi_2$ 均为安全切点$\}$\;
+\tcp{安全：不存在 $(s,s{+}n)$ 使 $\pi(s)<k<\pi(s{+}n)$}
+\If{$\mathcal{K} = \emptyset$}{\Return $p_1$\;}
+均匀抽取 $k \in \mathcal{K}$\;
+$c(1:k) \gets p_1(1:k)$；$U \gets c(1:k)$ 中已出现基因集合\;
+\For{自左向右扫描 $p_2$ 的下标 $t$}{
+  $g \gets p_2(t)$\;
+  \If{$g \notin U$}{
+    \uIf{$g=0$}{追加 $g$；加入 $U$\;}
+    \uElseIf{$n < g \leq 2n$}{
+      \If{商家 $(g{-}n)$ 已在 $U$ 中}{追加 $g$；加入 $U$\;}
+    }
+    \Else{追加 $g$；加入 $U$\;}
+  }
+  \If{已填满长度 $\varDim$}{\textbf{跳出}\;}
+}
+$c \gets \textsc{RepairSolution}(c,n,m,\varDim)$\;
+\If{\textbf{不满足} \textsc{IsValid}$(c)$}{$c \gets \textsc{RepairOrder}(c,n)$\;}
+$c \gets \textsc{RepairSegments}(c,n,m)$\;
+\Return $c$\;
+\end{algorithm}
+
+\begin{algorithm}[htbp]
+\caption{对优先级交叉 PPC（\texttt{PairPriorityCrossover}）}
+\KwData{合法父代 $p_1,p_2$}
+\KwResult{子代 $c$}
+\For{$s=1$ \KwTo $n$}{
+  $\mathrm{pri}_1(s) \gets s$ 在 $p_1$ 中首次出现位置\;
+  $\mathrm{pri}_2(s) \gets s$ 在 $p_2$ 中首次出现位置\;
+  $\mathrm{merged}(s) \gets \min(\mathrm{pri}_1(s),\mathrm{pri}_2(s))$\;
+}
+按 $\mathrm{merged}$ 升序排列商家得列表 $M$\;
+$c \gets \zeros(1,\varDim)$；从左起依次写入 $M$ 中商家\;
+\For{列表 $M$ 中每个商家 $s$}{
+  在 $c$ 中找到 $s$ 的位置 $\ell$\;
+  自 $\ell{+}1$ 向右扫描：将第一个仍为 $0$ 的位置改为客户 $s{+}n$\;
+}
+$c \gets \textsc{RepairSolution}(c,n,m,\varDim)$\;
+\If{\textbf{不满足} \textsc{IsValid}$(c)$}{$c \gets \textsc{RepairOrder}(c,n)$\;}
+$c \gets \textsc{RepairSegments}(c,n,m)$\;
+\Return $c$\;
+\end{algorithm}
+
+\begin{algorithm}[htbp]
+\caption{顺序保持交叉 OPC（\texttt{OrderPreservingCrossover}）}
+\KwData{合法父代 $p_1,p_2$}
+\KwResult{子代 $c$}
+提取商家访问顺序 $O_1,O_2$（按扫描首次出现，去重保序）\;
+\If{$O_1$ 或 $O_2$ 为空}{\Return $p_1$\;}
+$f \gets \mathrm{randint}(1,|O_1|)$\;
+$F \gets \mathrm{unique}([O_1(1:f),O_2(f{+}1:\text{end})],\text{stable})$\;
+将 $O_1 \cup O_2$ 中尚未出现在 $F$ 的商家接到 $F$ 末尾\;
+\If{$F = O_1$ \textbf{且} $|F|\geq 2$}{随机交换 $F$ 中两个位置\;}
+按与 PPC 相同方式由 $F$ 构造 $c$（先写商家，再在各自后填第一个 $0$ 为客户）\;
+$c \gets \textsc{RepairSolution}(c,n,m,\varDim)$\;
+\If{\textbf{不满足} \textsc{IsValid}$(c)$}{$c \gets \textsc{RepairOrder}(c,n)$\;}
+$c \gets \textsc{RepairSegments}(c,n,m)$\;
+\Return $c$\;
+\end{algorithm}
+
+\begin{algorithm}[htbp]
+\caption{保序变异 \texttt{OrderPreservingMutation}（调度 T1--T4）}
+\KwData{个体 $x$，$m,n,\varDim$，探索率 $\rho$（即 \texttt{er}）}
+\KwResult{变异后 $x'$}
+用 $m{-}1$ 个 $0$ 将 $x$ 切分为段 $S_1..S_m$\;
+\uIf{$\mathrm{rand}() < \rho$}{
+  $x' \gets \textsc{Type4\_SegSwap}(x,\{S_k\},m,n,\varDim)$ \tcp*{T4 大步长：跨段迁移整对}
+}
+\Else{
+  $t \gets \mathrm{randint}(1,3)$\;
+  \uIf{$t=1$}{$x' \gets \textsc{Type1}(x)$ \tcp*{T1：段内商家移至段首}}
+  \uElseIf{$t=2$}{$x' \gets \textsc{Type2}(x)$ \tcp*{T2：段内客户移至段尾}}
+  \Else{$x' \gets \textsc{Type3\_MoveDelimiter}(x)$ \tcp*{T3：滑动分隔符 $0$}}
+}
+修正长度与 $0$ 的个数；\If{$x'=x$}{再试 T4 或段内随机对交换\;}
+\Return $x'$\;
+\end{algorithm}
+
+\begin{algorithm}[htbp]
+\caption{变异 T1：随机商家移至\textbf{该段段首}}
+\KwData{$x$，段 $\{S_k\}$，扩展零位置数组 $E$}
+\KwResult{$x'$}
+$\mathcal{V} \gets$ 含至少一个商家基因 $\{1..n\}$ 的段号集合\;
+\If{$\mathcal{V}=\emptyset$}{\Return $x$\;}
+随机取 $k \in \mathcal{V}$，$\sigma \gets S_k$\;
+随机取 $\sigma$ 中一商家基因 $a$\;
+从 $\sigma$ 原位移除 $a$；$\sigma' \gets [a,\sigma]$\;
+$x' \gets x$；将 $\sigma'$ 写回段 $k$ 对应全局位置\;
+\Return $x'$\;
+\end{algorithm}
+
+\begin{algorithm}[htbp]
+\caption{变异 T2：随机客户移至\textbf{该段段尾}}
+\KwData{$x$，段 $\{S_k\}$，扩展索引 $E$}
+\KwResult{$x'$}
+$\mathcal{V} \gets$ 含至少一个客户基因 $\{n{+}1..2n\}$ 的段号集合\;
+\If{$\mathcal{V}=\emptyset$}{\Return $x$\;}
+随机取 $k \in \mathcal{V}$，$\sigma \gets S_k$\;
+随机取客户 $b$；移除 $b$；$\sigma' \gets [\sigma, b]$\;
+$x' \gets x$；写回段 $k$\;
+\Return $x'$\;
+\end{algorithm}
+
+\begin{algorithm}[htbp]
+\caption{变异 T3：在\textbf{不撕开完整对}的前提下滑动一个分隔符 $0$}
+\KwData{$x$，$\{S_k\}$，$E$，$m,n,\varDim$}
+\KwResult{$x'$}
+\If{$m \leq 1$}{\Return $x$\;}
+随机选可移动的段间分隔符编号 $z \in \{1..m{-}1\}$\;
+$d \gets \mathrm{randint}(0,1)$ \tcp*{$0$：向左段扫描；$1$：向右段扫描}
+\If{$d=0$}{$q \gets \textsc{TraverseForward}(\cdots)$ \tcp*{商家前合法插 $0$}}
+\Else{$q \gets \textsc{TraverseBackward}(\cdots)$ \tcp*{客户后合法插 $0$}}
+\If{$q<0$}{\Return $x$\;}
+删去原位置 $E(z{+}1)$ 处的 $0$；必要时修正 $q$\;
+在全局位置 $q$ 插入 $0$；对齐 $\varDim$\;
+\Return $x'$\;
+\end{algorithm}
+
+\begin{algorithm}[htbp]
+\caption{T3 辅助：\texttt{TraverseForward} / \texttt{TraverseBackward}（要点）}
+\KwData{段向量、分隔符上下文、$n$}
+\KwResult{新 $0$ 的全局下标，失败返回 $-1$}
+\textsc{TraverseForward}：自左段\textbf{尾}向\textbf{头}扫描\;
+\Indp
+在每个商家 $a$ 处，设 $C$ 为已扫后缀中的客户集合\;
+\lIf{$C$ 为空或 $C$ 只属于已扫商家与 $\{a\}$ 对应客户 \textbf{且} $a$ 前位置合法}{返回该下标}
+\Indm
+\textsc{TraverseBackward}：自右段\textbf{头}向\textbf{尾}扫描\;
+\Indp
+在每个客户 $c$ 处，设 $M$ 为已扫前缀中的商家集合\;
+\lIf{$M$ 为空或 $M$ 只属于已扫客户与 $\{c\}$ 对应商家 \textbf{且} $c$ 后位置合法}{返回该下标}
+\Indm
+\Return $-1$\;
+\end{algorithm}
+
+\begin{algorithm}[htbp]
+\caption{变异 T4：\texttt{Type4\_SegSwap}（跨段迁移完整商家--客户对，示意）}
+\KwData{段划分 $\{S_k\}$}
+选取至少含两对的源段 $k_s$\;
+随机选源段中成对出现的 $(a,a{+}n)$\;
+从 $S_{k_s}$ 按序移除 $(a,a{+}n)$\;
+随机选目标段 $k_t \neq k_s$；在 $S_{k_t}$ 随机插入位置连续插入 $a,a{+}n$\;
+重建染色体；\If{约束不满足}{\Return 未改变的 $x$\;}
+\Return 重建个体\;
+\end{algorithm}
+
+\begin{algorithm}[htbp]
+\caption{段修复流水线 \texttt{OrderSegmentRepair}（抽象）}
+\KwData{染色体 $c$}
+$\textsc{EnsureNoZeroAtEnds}(c)$ \tcp*{首尾非 $0$}
+$\textsc{RepairSegments}(c)$ \tcp*{客户归位到对应商家所在段}
+$\textsc{RepairSegmentSizes}(c,m)$ \tcp*{每段长度偶数且 $\geq 2$}
+长度对齐至 $\varDim$\;
+\Return $c$\;
+\end{algorithm}
+
+\end{document}
