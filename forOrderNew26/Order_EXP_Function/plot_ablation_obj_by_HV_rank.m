@@ -12,7 +12,7 @@
 
 % ---------- 直接运行本文件时执行（F5）：可修改下面两行 ----------
 expNames = {'ablation06_A_amos', 'ablation06_A_amos_noCluster','ablation06_A_amos_allBYJC'};   % 留空=扫描所有实验；或指定如 {'ablation_A_amos'}
-hv_rank  = 1;    % 30 次中按最终 HV 排名，画第几名的那次（1=最好，2=第2名…）
+hv_rank  = 15;    % 30 次中按最终 HV 排名，画第几名的那次（1=最好，2=第2名…）
 plot_ablation_obj_by_HV_rank_inside(expNames, hv_rank);
 
 function plot_ablation_obj_by_HV_rank_inside(expNames, hv_rank)
@@ -77,6 +77,12 @@ function run_plot_ablation_obj_by_HV_rank(expNames, hv_rank)
                 warning('实验 %s 无法得到 HV 排名第 %d 的 run 序号，跳过。', expName, hv_rank);
                 continue;
             end
+            runPath = fullfile(ablation_dir, expName, [expName '_run' sprintf('%02d', runIdx) '.xlsx']);
+            if ~isfile(runPath)
+                warning('未找到 run 文件: %s，跳过。', runPath);
+                continue;
+            end
+            Obj = read_obj_data(runPath);
             runPath = fullfile(ablation_dir, expName, [expName '_run' sprintf('%02d', runIdx) '.xlsx']);
             if ~isfile(runPath)
                 warning('未找到 run 文件: %s，跳过。', runPath);

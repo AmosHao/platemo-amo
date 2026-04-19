@@ -600,8 +600,8 @@ function order = SegmentBasedCrossover_extractMerchantOrder(individual, n)
             order = [order, gene];
         end
     end
-    % 去重
-    order = unique(order);
+    % 去重（保序：保留沿染色体扫描的商家出现顺序，供 OPC 顺序融合）
+    order = unique(order, 'stable');
 end
 
 function seq = SegmentBasedCrossover_ensureNoZeroAtEnds(seq)

@@ -205,55 +205,56 @@ classdef planner_order_v3 < PROBLEM
         s_solidity = b_blades * c_chord * R_rotor / (pi * R_rotor^2);  % 桨盘实度
         P_0 = (delta_drag / 8) * rho_air * s_solidity * A_rotor * Omega^3 * R_rotor^3;  % 型阻功率常数
         % 引入数据文件（包含坐标、障碍物、惩罚系数等）
-        % 数据文件路径：从当前文件位置到 forOrderNew26/Order_Map/order_data.m
-        current_file_dir = fileparts(mfilename('fullpath'));
-        % 从 PlatEMO/Problems/Multi-objective optimization/Amos/ 到 PlatEMO/ 目录
-        platemo_root = fileparts(fileparts(fileparts(current_file_dir)));
-        data_file_path = fullfile(platemo_root, 'forOrderNew26', 'Order_Map', 'order_data.m');
+        % 为避免并行 worker 路径不可见/跨机器目录结构不同，这里使用“显式字符串路径”
+        % 你可以按另一台电脑的实际位置修改下面两条路径
+        if ispc
+            data_file_path = 'D:\PlatEMO-master-using\PlatEMO\forOrderNew26\Order_Map\order_data.m';
+        else
+            data_file_path = '/home/haichao/Documents/why/why_fromlev/PlatEMO/forOrderNew26/Order_Map/order_data.m';
+        end
         
         if exist(data_file_path, 'file')
-            run(data_file_path);
+            % 不用 run(...)：避免被工程内同名 run.m 脚本遮蔽导致“脚本当函数执行”报错
+            codeStr = fileread(data_file_path);
+            eval(codeStr); %#ok<EVLDIR>
         else
             % 如果找不到数据文件，使用默认数据（向后兼容）
             warning('找不到数据文件 %s，使用默认数据', data_file_path);
-            % // dotss = [
-            % //     5000, 5000, 800;   % 配送中心（在正中间）
-            % //     8156, 1270, 800;   % 商家1
-            % //     9058, 2785, 800;   % 商家2
-            % //     8500, 1576, 800;   % 商家3
-            % //      975, 1419, 800;   % 商家4
-            % //     2785, 5469, 800;   % 商家5
-            % //     9575, 9649, 800;   % 商家6
-            % //     4854, 8003, 800;   % 商家7
-            % //     7922, 9595, 800;   % 商家8
-            % //      357, 6557, 800;   % 商家9
-            % //     8491, 9340, 800;   % 商家10
-            % //      500,  500, 800;   % 客户点11
-            % //     1500, 2800, 800;   % 客户点12
-            % //     7000, 3000, 800;   % 客户点13
-            % //     9000, 5500, 800;   % 客户点14
-            % //     1500, 4500, 800;   % 客户点15
-            % //     9500, 5500, 800;   % 客户点16
-            % //      500, 7000, 800;   % 客户点17
-            % //     6000, 6100, 800;   % 客户点18
-            % //     1800, 8950, 800;   % 客户点19
-            % //     6050, 9200, 800    % 客户点20
-            % // ];
-            % // forbidden_zones = [
-            % //     2000, 2000, 4000, 4000;
-            % //     6000, 1000, 8000, 3000;
-            % // ];
-            % // crowded_zones = [
-            % //     6500, 6500, 500;
-            % //     3000, 7000, 800;
-            % // ];
-            % // noise_zones = [
-            % //     4500, 3500, 5500, 4500;
-            % //     8500, 3500, 9500, 4500;
-            % // ];
-            % // penalty_forbidden = 2000;
-            % // penalty_crowded = 500;
-            % // penalty_noise = 1000;
+            % 兜底：并行 worker 上常见情况是路径不可见，必须给出可运行默认值
+            % dotss: 21×3，索引约定：1-10=商家，11-20=客户，21=配送中心
+            % 这里使用一个简单可运行的默认布局（不影响你在有 order_data.m 时的真实数据）
+            % dotss = zeros(21,3);
+            % dotss(21,:) = [5000, 5000, 800];  % 配送中心
+            % % 商家 1..10
+            % dotss(1:10,:) = [ ...
+            %     8156, 1270, 800; ...
+            %     9058, 2785, 800; ...
+            %     8500, 1576, 800; ...
+            %      975, 1419, 800; ...
+            %     2785, 5469, 800; ...
+            %     9575, 9649, 800; ...
+            %     4854, 8003, 800; ...
+            %     7922, 9595, 800; ...
+            %      357, 6557, 800; ...
+            %     8491, 9340, 800];
+            % % 客户 11..20
+            % dotss(11:20,:) = [ ...
+            %      500,  500, 800; ...
+            %     1500, 2800, 800; ...
+            %     7000, 3000, 800; ...
+            %     9000, 5500, 800; ...
+            %     1500, 4500, 800; ...
+            %     9500, 5500, 800; ...
+            %      500, 7000, 800; ...
+            %     6000, 6100, 800; ...
+            %     1800, 8950, 800; ...
+            %     6050, 9200, 800];
+            % forbidden_zones = [];
+            % crowded_zones = [];
+            % noise_zones = [];
+            % penalty_forbidden = 0;
+            % penalty_crowded  = 0;
+            % penalty_noise    = 0;
         end
         
         % 计算距离矩阵（21×21）
@@ -1127,11 +1128,25 @@ classdef planner_order_v3 < PROBLEM
         P_0=(delta_drag/8)*rho_air*s_solidity*A_rotor*Omega^3*R_rotor^3;
         maxload=3; maxEC=800000; loadScale=1e4;  % 与 CalObj 中 maxEC 保持同步
         lam1=0.5; lam2=1.0;
-        % 加载地图数据
-        current_file_dir=fileparts(mfilename('fullpath'));
-        platemo_root=fileparts(fileparts(fileparts(current_file_dir)));
-        data_file_path=fullfile(platemo_root,'forOrderNew26','Order_Map','order_data.m');
-        if exist(data_file_path,'file'), run(data_file_path); end
+        % 加载地图数据（与 CalObj 保持一致：显式字符串路径）
+        if ispc
+            data_file_path = 'D:\PlatEMO-master-using\PlatEMO\forOrderNew26\Order_Map\order_data.m';
+        else
+            data_file_path = '/home/haichao/Documents/why/why_fromlev/PlatEMO/forOrderNew26/Order_Map/order_data.m';
+        end
+        if exist(data_file_path,'file')
+            codeStr = fileread(data_file_path);
+            eval(codeStr); %#ok<EVLDIR>
+        else
+            warning('找不到数据文件 %s，使用空障碍物/默认惩罚系数', data_file_path);
+            % dotss = zeros(21,3);
+            % forbidden_zones = [];
+            % crowded_zones = [];
+            % noise_zones = [];
+            % penalty_forbidden = 0;
+            % penalty_crowded  = 0;
+            % penalty_noise    = 0;
+        end
         if obj.use_map_penalty
             d_matrix=calculate_distance_matrix_with_obstacles(...
                 dotss,forbidden_zones,crowded_zones,noise_zones,...
