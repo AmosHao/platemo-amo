@@ -1,0 +1,337 @@
+\subsection{算法框架}
+多目标进化算法通常保留“初始化—后代生成—环境选择”的逻辑闭环，而MEOF的主要贡献由专门的可行初始化框架和结构保持的交叉/变异框架构成，涉及了初始化和后代生成两大部分，环境选择部分可以采用任意适配特定算法结构的环境选择算子。MEOF的总体流程如算法~\ref{alg:amos_overall} 所示。
+
+\begin{algorithm}[H]
+	\caption{MEOF}
+	\label{alg:amos_overall}
+	\begin{algorithmic}[1]
+		\REQUIRE 种群规模 $N$，最大迭代次数或最大评价次数 $\mathrm{maxFE}$
+		\ENSURE 近似帕累托解集（最终种群或其非支配子集）
+		\STATE $P \leftarrow \textsc{InitPopulation}(N)$ \hfill（第~\ref{sec:amos_init}节）
+		\STATE 评价 $P$，得到目标值集合 $\mathbf{F}(P)$
+		\WHILE{未满足终止条件}
+		\STATE $Q \leftarrow \emptyset$
+		\FOR{$i=1$ \TO $N$}
+		\STATE 按多目标适应度或锦标赛等策略选择父代
+		\STATE $\mathbf{y} \leftarrow \textsc{Variation}(\mathbf{p}_1,\mathbf{p}_2)$ \hfill（结构保持交叉/变异，第~\ref{sec:amos_variation}节）
+		\STATE 对 $\mathbf{y}$ 执行可行性修复（段结构修复/完整性修复）
+		\STATE $Q \leftarrow Q \cup \{\mathbf{y}\}$
+		\ENDFOR
+		\STATE 评价 $Q$，得到 $\mathbf{F}(Q)$
+		\STATE $P \leftarrow \textsc{EnvironmentalSelection}(P\cup Q, N)$ \hfill
+		\ENDWHILE
+		\RETURN $P$
+	\end{algorithmic}
+\end{algorithm}
+
+
+
+
+\subsection{初始化}
+\label{sec:amos_init}
+
+随机排列初始化会以较高概率违反先后约束与分段结构，导致大量不可行解与额外修复成本。为此本文设计可行性保持初始化算子InitPopulation：首先将每个订单构造成“商家-客户”成对单元 $(k, k+n)$，保证先后约束天然满足；随后随机打乱这些成对单元的顺序以生成多样性；最后仅在不拆分成对结构的位置插入 $(m-1)$ 个分隔符 $0$，从而保证段结构与维度一致。初始化过程如算法~\ref{alg:amos_init} 所示。
+
+\begin{algorithm}[H]
+	\caption{InitPopulation}
+	\label{alg:amos_init}
+	\begin{algorithmic}[1]
+		\REQUIRE $N,n,m$，维度 $D=2n+(m-1)$
+		\ENSURE 初始种群 $P$
+		\FOR{$i=1$ \TO $N$}
+		\STATE 构造 $n$ 个成对单元：$\mathcal{U}=\{(1,1+n),\ldots,(n,2n)\}$
+		\STATE 随机打乱成对单元顺序得到序列 $S$（长度 $2n$）
+		\STATE 令可插入分隔符的位置集合为 $\mathcal{E}=\{2,4,\ldots,2n-2\}$（仅允许在偶数位置后插入，避免拆对）
+		\STATE 从 $\mathcal{E}$ 中随机选取 $(m-1)$ 个位置（若 $m=1$ 则跳过），按从小到大插入 $0$
+		\STATE 得到 $\mathbf{x}$，并校验 $|\mathbf{x}|=D$ 且 $0$ 的数量为 $(m-1)$
+		\STATE 将 $\mathbf{x}$ 加入 $P$
+		\ENDFOR
+		\RETURN $P$
+	\end{algorithmic}
+\end{algorithm}
+
+
+\subsection{子代生成}
+\label{sec:amos_variation}
+
+针对“成对约束 + 分隔符分段”的特殊编码，本文采用结构保持的变异算子与交叉算子，并在每次产生子代后执行修复，以确保搜索主要发生在可行域内。总体原则为：
+\begin{itemize}
+	\item \textbf{交叉}：在不破坏段结构与成对结构的前提下重组父代信息。
+	\item \textbf{变异}：以较小扰动对序列进行局部调整（段内交换、对的迁移、分隔符平移等），提升探索能力。
+	\item \textbf{修复}：对交叉/变异后的子代执行段结构修复（保证每段由完整对构成）、以及完整性修复（保证节点全集与分隔符数量正确）。
+\end{itemize}
+
+MEOF的子代生成采用“交叉/变异二选一”的框架，概率可固定或自适应，如算法~\ref{alg:amos_variation} 所示。
+
+\begin{algorithm}[H]
+	\caption{Variation}
+	\label{alg:amos_variation}
+	\begin{algorithmic}[1]
+		\REQUIRE 当前个体 $\mathbf{x}$，父代集合/索引，交叉概率 $p_c$
+		\ENSURE 子代 $\mathbf{y}$
+		\STATE 以概率 $p_c$ 执行交叉，否则执行变异
+		\IF{执行交叉}
+		\STATE $\mathbf{y} \leftarrow \textsc{SegX}(\mathbf{x},\mathbf{x}')$ \hfill（段结构交叉）
+		\ELSE
+		\STATE $\mathbf{y} \leftarrow \textsc{OPMut}(\mathbf{x})$ \hfill（顺序保持变异）
+		\ENDIF
+		\STATE $\mathbf{y} \leftarrow \textsc{SegRepair}(\mathbf{y})$ \hfill（段结构修复）
+%		\STATE $\mathbf{y} \leftarrow \textsc{DimRepair}(\mathbf{y})$ \hfill（维度/$0$ 数量校正）
+		\RETURN $\mathbf{y}$
+	\end{algorithmic}
+\end{algorithm}
+
+\subsubsection{\textsc{SegX}：段结构交叉框架}
+\textsc{SegX} 面向“成对约束 + 分隔符分段”的染色体结构，目标是在重组父代信息时尽量保持商家--客户对的相对逻辑，并降低后续修复的代价。为兼顾不同的重组偏好，将段结构交叉设计为一个算子族：PTC（位置追踪交叉）、PPC（对优先级交叉）与 OPC（顺序保持交叉）。其中，PTC 强调“前缀继承 + 扫描补齐”的位置追踪思想；PPC 强调“更早出现的商家优先”的全局优先级融合；OPC 强调“商家访问顺序”的序列融合。整体选择与调用框架见算法~\ref{alg:segx}。
+
+三类交叉均以两个合法父代 $\mathbf{p}_1,\mathbf{p}_2$ 为输入，输出一个长度为 $D$ 的子代向量 $\mathbf{c}$。为保证输出满足编码约束，交叉末尾统一连接 \textsc{SegRepair}，用于恢复“成对不跨段、段长度合理”等必要性质。
+
+\begin{algorithm}[H]
+	\caption{SegX（\textsc{PTC}/\textsc{PPC}/\textsc{OPC} 三交叉框架）}
+	\label{alg:segx}
+	\begin{algorithmic}[1]
+		\REQUIRE 两个父代 $\mathbf{p}_1,\mathbf{p}_2$（合法染色体），规模 $n,m$，维度 $D$
+		\ENSURE 交叉子代 $\mathbf{c}$
+		\STATE 从 $\{\textsc{PTC},\textsc{PPC},\textsc{OPC}\}$ 中按预设概率选择一种交叉方式
+		\IF{选择 \textsc{PTC}}
+		\STATE $\mathbf{c} \leftarrow \textsc{PTC}(\mathbf{p}_1,\mathbf{p}_2,n,m,D)$
+		\ELSIF{选择 \textsc{PPC}}
+		\STATE $\mathbf{c} \leftarrow \textsc{PPC}(\mathbf{p}_1,\mathbf{p}_2,n,m,D)$
+		\ELSE
+		\STATE $\mathbf{c} \leftarrow \textsc{OPC}(\mathbf{p}_1,\mathbf{p}_2,n,m,D)$
+		\ENDIF
+		\RETURN $\mathbf{c}$
+	\end{algorithmic}
+\end{algorithm}
+
+\noindent\textbf{PTC 的流程说明：}首先在两父代上建立基因位置映射，并从“不会劈开任一对 $(s,s{+}n)$”的安全切点中抽取切点 $k$。子代左侧直接复制父代1前缀；右侧按父代2从左到右扫描补齐，但对客户基因施加限制：客户 $s{+}n$ 仅当对应商家 $s$ 已出现在子代中时才允许写入。该机制在构造阶段即主动避免“客户早于商家”的硬违规，从而减少修复压力。具体流程见算法\ref{alg:ptc_slim}和图\ref{PTC}。
+
+\begin{algorithm}[H]
+	\caption{PTC：位置追踪交叉}
+	\label{alg:ptc_slim}
+	\begin{algorithmic}[1]
+		\REQUIRE 父代 $\mathbf{p}_1,\mathbf{p}_2$，$n,m,D$
+		\ENSURE 子代 $\mathbf{c}$
+		\STATE 构造基因 $1..2n$ 的位置映射 $\pi_1,\pi_2$
+		\STATE 计算安全切点集合 $\mathcal{K}$（切点不落在任一对 $(s,s{+}n)$ 的内部）
+		\IF{$\mathcal{K}=\emptyset$}
+		\RETURN $\mathbf{p}_1$
+		\ENDIF
+		\STATE 均匀抽取 $k\in\mathcal{K}$，令 $\mathbf{c}(1{:}k)\leftarrow \mathbf{p}_1(1{:}k)$，$U\leftarrow$ 已出现基因集合
+		\FOR{从左到右扫描 $\mathbf{p}_2$}
+		\STATE 取当前基因 $g$
+		\STATE 若 $g\notin U$，则按“商家先于客户”的门控规则尝试追加 $g$（客户 $s{+}n$ 仅当商家 $s\in U$ 时允许写入）
+		\STATE 若已填满 $D$，则跳出
+		\ENDFOR
+		\STATE $\mathbf{c} \leftarrow \textsc{SegRepair}(\mathbf{c})$
+%		\STATE $\mathbf{c} \leftarrow \textsc{DimRepair}(\mathbf{c})$
+		\RETURN $\mathbf{c}$
+	\end{algorithmic}
+\end{algorithm}
+\vspace{-0.25em}
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=4in]{images/PTC}
+	\bicaption{PTC算子示意图}{Schematic diagram of PTC operator.}
+	\label{PTC}
+\end{figure}
+
+\noindent\textbf{PPC 的流程说明：}在包含客户与分隔符的完整槽位序列上，分别记录每个商家 $s$ 在父代中的首次出现位置，并以两者的最小值作为合并优先级。随后按合并优先级对商家排序，先顺序写入商家，再依次在其右侧的第一个空槽写入对应客户。该过程可视为“先确定商家骨架、再填充客户”，能够在不同父代的全局位置偏好之间形成折中。具体流程见算法\ref{alg:ppc_slim}和图\ref{PPC}。
+
+
+
+\begin{algorithm}[H]
+	\caption{PPC：对优先级交叉}
+	\label{alg:ppc_slim}
+	\begin{algorithmic}[1]
+		\REQUIRE 父代 $\mathbf{p}_1,\mathbf{p}_2$，$n,m,D$
+		\ENSURE 子代 $\mathbf{c}$
+		\FOR{$s=1$ \TO $n$}
+		\STATE $\mathrm{pri}_1(s)\leftarrow$ 商家 $s$ 在 $\mathbf{p}_1$ 中首次出现槽位
+		\STATE $\mathrm{pri}_2(s)\leftarrow$ 商家 $s$ 在 $\mathbf{p}_2$ 中首次出现槽位
+		\STATE $\mathrm{merged}(s)\leftarrow \min(\mathrm{pri}_1(s),\mathrm{pri}_2(s))$
+		\ENDFOR
+		\STATE 按 $\mathrm{merged}$ 升序排序商家得到列表 $M$
+		\STATE $\mathbf{c}\leftarrow \mathbf{0}_{1\times D}$；从左起依次写入 $M$ 中商家
+		\FOR{按 $M$ 的顺序遍历每个商家 $s$}
+		\STATE 在 $s$ 右侧扫描，将第一个仍为 $0$ 的槽位改写为客户 $s{+}n$
+		\ENDFOR
+		\STATE $\mathbf{c} \leftarrow \textsc{SegRepair}(\mathbf{c})$
+%		\STATE $\mathbf{c} \leftarrow \textsc{DimRepair}(\mathbf{c})$
+		\RETURN $\mathbf{c}$
+	\end{algorithmic}
+\end{algorithm}
+\vspace{-0.25em}
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=4in]{images/PPC}
+	\bicaption{PPC算子示意图}{Schematic diagram of PPC operator.}
+	\label{PPC}
+\end{figure}
+\noindent\textbf{OPC 的流程说明：}先从父代中提取商家访问顺序向量 $O_1,O_2$，再在随机融合点 $f$ 处拼接并做保序去重，得到融合顺序 $F$，最后补全缺失商家以保证覆盖 $1...n$。与 PPC 类似，OPC 先按 $F$ 写入商家骨架，再在右侧第一个空槽写入客户，从而使子代在“商家访问顺序”维度上继承父代信息。具体流程见算法\ref{alg:opc_slim}和图\ref{OPC}。
+
+\begin{algorithm}[H]
+	\caption{OPC：顺序保持交叉}
+	\label{alg:opc_slim}
+	\begin{algorithmic}[1]
+		\REQUIRE 父代 $\mathbf{p}_1,\mathbf{p}_2$，$n,m,D$
+		\ENSURE 子代 $\mathbf{c}$
+		\STATE 提取父代商家访问顺序 $O_1,O_2$（按扫描首次出现、去重保序）
+		\IF{$O_1$ 或 $O_2$ 为空}
+		\RETURN $\mathbf{p}_1$
+		\ENDIF
+	\STATE 随机取融合点 $f$，并基于父代前后片段构造融合顺序 $F$
+	\STATE $F \leftarrow \mathrm{unique}\bigl([O_1(1{:}f),\, O_2(f{+}1{:}\mathrm{end})], \mathrm{stable}\bigr)$
+		\STATE 将缺失的商家按规则补全到 $F$ 末尾直至 $|F|=n$
+		\STATE 由 $F$ 按“先写商家，再在右侧第一个 $0$ 槽写入对应客户”的规则构造 $\mathbf{c}$
+		\STATE $\mathbf{c} \leftarrow \textsc{SegRepair}(\mathbf{c})$
+%		\STATE $\mathbf{c} \leftarrow \textsc{DimRepair}(\mathbf{c})$
+		\RETURN $\mathbf{c}$
+	\end{algorithmic}
+\end{algorithm}
+\vspace{-0.25em}
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=4in]{images/OPC}
+	\bicaption{OPC算子示意图}{Schematic diagram of OPC operator.}
+	\label{OPC}
+\end{figure}
+
+\subsubsection{\textsc{OPMut}：顺序保持变异框架}
+\textsc{OPMut} 面向段式编码的局部搜索需求，将“段内微调”与“跨段重分配”统一到一个可控的变异调度中。算子族包含四种扰动：T1 将随机商家移动到所在段段首，促进段内先取后送的可行排序收敛；T2 将随机客户移动到段尾，减少“客户过早出现”的风险；T3 在不撕开完整对的安全边界上滑动一个分隔符，实现分段结构的细粒度调整；T4 直接跨段迁移一整对 $(s,s{+}n)$，属于大步长探索。调度框架如算法~\ref{alg:opmut} 所示，其中探索率 $\rho$ 控制 T4 的触发频率，以平衡探索与开发。
+
+\begin{algorithm}[H]
+	\caption{OPMut（T1--T4 调度框架）}
+	\label{alg:opmut}
+	\begin{algorithmic}[1]
+		\REQUIRE 个体 $\mathbf{x}$，规模 $n,m,D$，探索率 $\rho$（如 \texttt{er}）
+		\ENSURE 变异后个体 $\mathbf{x}'$
+		\STATE 用 $m{-}1$ 个 $0$ 将 $\mathbf{x}$ 切分为段集合 $\{S_k\}_{k=1}^m$
+		\IF{$\mathrm{rand}<\rho$}
+		\STATE $\mathbf{x}' \leftarrow \textsc{T4}(\mathbf{x},\{S_k\},n,m,D)$ \hfill（跨段迁对，大步长）
+		\ELSE
+		\STATE 随机取 $t\in\{1,2,3\}$
+		\IF{$t=1$}
+		\STATE $\mathbf{x}' \leftarrow \textsc{T1}(\mathbf{x},\{S_k\},n)$
+		\ELSIF{$t=2$}
+		\STATE $\mathbf{x}' \leftarrow \textsc{T2}(\mathbf{x},\{S_k\},n)$
+		\ELSE
+		\STATE $\mathbf{x}' \leftarrow \textsc{T3}(\mathbf{x},\{S_k\},n,m)$
+		\ENDIF
+		\ENDIF
+%		\STATE $\mathbf{x}' \leftarrow \textsc{DimRepair}(\mathbf{x}')$
+		\RETURN $\mathbf{x}'$
+	\end{algorithmic}
+\end{algorithm}
+
+\noindent\textbf{T1 的流程说明：}在至少含有一个商家基因的段中随机选段，再随机选商家并移到段首；分隔符位置保持不变。该操作对应“段内重排”，扰动幅度小、可快速改善段内的先后关系与局部结构。
+\begin{algorithm}[H]
+	\caption{T1：随机商家移至该段段首}
+	\label{alg:mut_t1}
+	\begin{algorithmic}[1]
+		\REQUIRE $\mathbf{x}$，段集合 $\{S_k\}$，$n$
+		\ENSURE $\mathbf{x}'$
+		\STATE 从含至少一个商家基因 $\{1..n\}$ 的段中随机选一段 $S_k$
+		\STATE 在 $S_k$ 内随机选商家 $a$，将 $a$ 从原位置删除并插入到该段最前端
+		\STATE 重建得到 $\mathbf{x}'$（分隔符位置不变）
+		\RETURN $\mathbf{x}'$
+	\end{algorithmic}
+\end{algorithm}
+\vspace{-0.25em}
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=4in]{images/mu1}
+	\bicaption{T1算子示意图}{Schematic diagram of T1 operator.}
+	\label{T1}
+\end{figure}
+
+\noindent\textbf{T2 的流程说明：}在至少含有一个客户基因的段中随机选段，再随机选客户并移到段尾。该操作倾向于将投递节点后移，降低客户出现在对应商家之前的概率，并为后续修复提供更好的初始形态。
+\begin{algorithm}[t]
+	\caption{T2：随机客户移至该段段尾}
+	\label{alg:mut_t2}
+	\begin{algorithmic}[1]
+		\REQUIRE $\mathbf{x}$，段集合 $\{S_k\}$，$n$
+		\ENSURE $\mathbf{x}'$
+		\STATE 从含至少一个客户基因 $\{n{+}1..2n\}$ 的段中随机选一段 $S_k$
+		\STATE 在 $S_k$ 内随机选客户 $b$，将 $b$ 从原位置删除并追加到该段末端
+		\STATE 重建得到 $\mathbf{x}'$
+		\RETURN $\mathbf{x}'$
+	\end{algorithmic}
+\end{algorithm}
+\vspace{-0.25em}
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=4in]{images/mu2}
+	\bicaption{T2算子示意图}{Schematic diagram of T2 operator.}
+	\label{T2}
+\end{figure}
+
+
+\noindent\textbf{T3 的流程说明：}随机选择一个段间分隔符并决定移动方向，在相邻段边界附近搜索新的分隔符位置；仅当新位置不会把任何一对 $(s,s{+}n)$ 拆分到不同段时才执行移动。该算子直接作用于分段结构，能在不大幅扰动段内顺序的情况下，改变任务分配边界。
+\begin{algorithm}[t]
+	\caption{T3：在不撕开完整对的前提下滑动一个分隔符 $0$}
+	\label{alg:mut_t3}
+	\begin{algorithmic}[1]
+		\REQUIRE $\mathbf{x}$，段集合 $\{S_k\}$，$n,m$
+		\ENSURE $\mathbf{x}'$
+		\IF{$m\le 1$}
+		\RETURN $\mathbf{x}$
+		\ENDIF
+		\STATE 随机选取一个段间分隔符，并随机决定向左或向右探索新位置
+		\STATE 在候选方向上扫描可移动边界，找到不将任一 $(s,s{+}n)$ 拆分到不同段的新位置
+		\IF{存在合法新位置}
+		\STATE 删除原 $0$ 并在新位置插入 $0$ 得到 $\mathbf{x}'$
+		\ELSE
+		\STATE $\mathbf{x}' \leftarrow \mathbf{x}$
+		\ENDIF
+		\RETURN $\mathbf{x}'$
+	\end{algorithmic}
+\end{algorithm}
+\vspace{-0.25em}
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=4in]{images/mu3}
+	\bicaption{T3算子示意图}{Schematic diagram of T3 operator.}
+	\label{T3}
+\end{figure}
+
+\noindent\textbf{T4 的流程说明：}从源段中剪切一整对 $(a,a{+}n)$ 并插入到另一段的某个位置，实现跨段重分配。由于其扰动幅度较大，本文用探索率 $\rho$ 对其触发进行控制，使算法在陷入局部结构时仍具备跳出能力。
+\begin{algorithm}[t]
+	\caption{T4：跨段迁移整对}
+	\label{alg:mut_t4}
+	\begin{algorithmic}[1]
+		\REQUIRE $\mathbf{x}$，段集合 $\{S_k\}$，$n,m,D$
+		\ENSURE $\mathbf{x}'$
+		\STATE 选取含至少两对的源段 $S_{k_s}$，随机选一完整对 $(a,a{+}n)$
+		\STATE 从 $S_{k_s}$ 中按序移除 $(a,a{+}n)$
+		\STATE 随机选目标段 $S_{k_t}$（$k_t\neq k_s$）及插入位置，连续插入 $a,a{+}n$
+		\STATE 重建得到 $\mathbf{x}'$；若违反约束则返回 $\mathbf{x}$
+		\RETURN $\mathbf{x}'$
+	\end{algorithmic}
+\end{algorithm}
+\vspace{-0.25em}
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=4in]{images/mu4}
+	\bicaption{T4算子示意图}{Schematic diagram of T4 operator.}
+	\label{T4}
+\end{figure}
+
+\subsubsection{\textsc{SegRepair}：统一段结构修复（\textsc{OrderSegmentRepair}）}
+\textsc{SegRepair} 用于在交叉/变异后恢复“段结构可行性”，其核心目标是：分隔符首尾不越界、客户尽量回到对应商家所在段、各段长度满足编码要求（偶数且不为空段）。该修复在实现中被设计为流水线式过程（算法~\ref{alg:segrepair}），从而可作为所有变异与交叉后的统一后处理模块。
+\begin{algorithm}[H]
+	\caption{SegRepair（\textsc{OrderSegmentRepair} 修复流水线框架）}
+	\label{alg:segrepair}
+	\begin{algorithmic}[1]
+		\REQUIRE 染色体 $\mathbf{c}$，规模 $n,m$，维度 $D$
+		\ENSURE 修复后染色体 $\mathbf{c}^\star$
+		\STATE \textbf{首尾非 $0$：}若 $c_1=0$，则将 $c_1$ 与从左起第一个非 $0$ 元素交换；若 $c_D=0$，则将 $c_D$ 与从右起第一个非 $0$ 元素交换
+		\STATE \textbf{对不跨段：}按 $0$ 将 $\mathbf{c}$ 切分为 $m$ 段；对每个 $s\in\{1,\ldots,n\}$，若商家 $s$ 与客户 $s{+}n$ 位于不同段，则将客户 $s{+}n$ 从其所在段移除，并插入到商家 $s$ 所在段中且紧随 $s$ 之后
+		\STATE \textbf{段长度修正：}重复执行：若存在长度为奇数或小于 $2$ 的段，则将相邻分隔符 $0$ 向该段一侧平移（通过与邻近基因交换）直至各段长度均为偶数且 $\ge 2$
+%		\STATE $\mathbf{c}^\star \leftarrow \textsc{DimRepair}(\mathbf{c})$
+		\RETURN $\mathbf{c}^\star$
+	\end{algorithmic}
+\end{algorithm}
