@@ -21,21 +21,21 @@ classdef planner_order_v3_fangzhen < PROBLEM
             if ~isempty(AMOS_USE_MAP_PENALTY)
                 obj.use_map_penalty = logical(AMOS_USE_MAP_PENALTY);
             end
-            obj.n=10;  % 客户点数量
+            obj.n=5;   % 客户点/商家对数量（仿真实验：s1~s5, k1~k5）
             obj.m=3;   % 无人机数量
             if isempty(obj.M); obj.M = 2; end
             % 编码维度：2*n个点（n个商家+n个客户点）+ (m-1)个0分隔符
             if isempty(obj.D); obj.D = 2*obj.n + (obj.m - 1); end
-            obj.lower = zeros(1,obj.D);  % 允许0（分隔符）和1-20（商家和客户点）
-            obj.upper = 2*obj.n*ones(1,obj.D);  % 最大编号为20（商家编号1-10，客户点编号11-20）
+            obj.lower = zeros(1,obj.D);  % 允许0（分隔符）和1-2n（商家1..n，客户n+1..2n）
+            obj.upper = 2*obj.n*ones(1,obj.D);  % 最大编号为2n（本实验：10）
             % 注意：不能使用encoding=5（permutation），因为序列中包含重复的0分隔符
             % 使用encoding=2（integer），然后通过自定义操作符处理
             obj.encoding = 2*ones(1,obj.D);  % 改为integer编码
             % 增加种群大小以提高搜索多样性和避免局部最优
             % 排列组合空间分析：
-            % - 20个点（商家1-10，客户点11-20）需要访问
-            % - 需要分成3段（3架无人机），分段方式：C(19,2) = 171种
-            % - 考虑顺序约束后，排列组合空间仍然很大（远大于20!）
+            % - 2n 个点（商家1..n，客户 n+1..2n）需要访问
+            % - 需要分成3段（3架无人机），分段方式随 n 而变
+            % - 考虑顺序约束后，排列组合空间仍很大
             % 因此需要足够大的种群来充分探索解空间
             if isempty(obj.N) || obj.N < 300
                 obj.N = 300;  % 从200增加到300，进一步提高多样性
@@ -172,13 +172,14 @@ classdef planner_order_v3_fangzhen < PROBLEM
         M=obj.M;%目标维度
         n=obj.n;%客户点数量
         m=obj.m;%无人机数量
+        depot_idx = 2*n + 1;  % 配送中心在 dotss / d_matrix 中的行号
         PopObj =zeros(N,M);
         % 参数设置
         % 无人机自身重量
         UAV_m=2;
-        % 10个客户点的货物重量 --最后补0代表返回配送中心时的载重
+        % n 个客户点的货物重量；末尾 0 表示返回配送中心时无额外载重
         % 注意：商家取餐时载重增加，客户点配送时载重减少
-        demand_q = [0.5; 0.7; 0.65; 0.9; 0.35; 0.2; 0.9; 0.1; 0.45; 0.77; 0]; 
+        demand_q = [1.95; 1.7; 0.95; 0.9; 1.85; 0]; 
         % 水平飞行速度
         v_h=10;
         % 垂直上升速度
@@ -208,9 +209,9 @@ classdef planner_order_v3_fangzhen < PROBLEM
         % 为避免并行 worker 路径不可见/跨机器目录结构不同，这里使用“显式字符串路径”
         % 你可以按另一台电脑的实际位置修改下面两条路径
         if ispc
-            data_file_path = 'D:\PlatEMO-master-using\PlatEMO\forOrderNew26\Order_Map\order_data.m';
+            data_file_path = 'D:\PlatEMO-master-using\PlatEMO\forOrderNew26\Order_Map\order_data_fangzhen.m';
         else
-            data_file_path = '/home/haichao/Documents/why/why_fromlev/PlatEMO/forOrderNew26/Order_Map/order_data.m';
+            data_file_path = '/home/haichao/Documents/why/why_fromlev/PlatEMO/forOrderNew26/Order_Map/order_data_fangzhen.m';
         end
         
         if exist(data_file_path, 'file')
@@ -257,8 +258,8 @@ classdef planner_order_v3_fangzhen < PROBLEM
             % penalty_noise    = 0;
         end
         
-        % 计算距离矩阵（21×21）
-        % 行/列索引：1-10=商家1-10, 11-20=客户点11-20, 21=配送中心
+        % 计算距离矩阵（(2n+1)×(2n+1)）
+        % 行/列：1..n=商家, n+1..2n=客户, 2n+1=配送中心
         if obj.use_map_penalty
             % 含障碍物惩罚（禁飞区/人流区/噪音区）
             d_matrix = calculate_distance_matrix_with_obstacles(...
@@ -269,30 +270,19 @@ classdef planner_order_v3_fangzhen < PROBLEM
             d_matrix = calculate_distance_matrix_with_obstacles(...
                 dotss, [], [], [], 0, 0, 0);
         end
-        % 时间窗矩阵（21行：商家1-10，客户点11-20，配送中心）
-        % 行索引：1-10=商家1-10, 11-20=客户点11-20, 21=配送中心
+        % 时间窗矩阵（2n+1 行：商家1..n，客户 n+1..2n，配送中心）
         TW_sec = [
-             0*60, 15*60;      % 商家1（出餐时间窗）
+             0*60, 15*60;      % 商家1（s1）
              0*60, 10*60;     % 商家2
              0*60, 10*60;     % 商家3
              0*60, 10*60;     % 商家4
              0*60, 10*60;     % 商家5
-             0*60, 15*60;     % 商家6
-             0*60, 12*60;     % 商家7
-             0*60, 10*60;     % 商家8
-             0*60, 10*60;     % 商家9
-             0*60, 10*60;     % 商家10
-            20*60, 40*60;     % 客户点11
-            10*60, 30*60;     % 客户点12
-             5*60, 25*60;     % 客户点13
-             0*60, 20*60;     % 客户点14
-             5*60, 25*60;     % 客户点15
-            20*60, 40*60;     % 客户点16
-            15*60, 35*60;     % 客户点17
-            10*60, 30*60;     % 客户点18
-             0*60, 20*60;     % 客户点19
-             5*60, 25*60;     % 客户点20
-            0, 100000000000   % 配送中心（第21行）
+            20*60, 40*60;     % 客户6（k1）
+            10*60, 30*60;     % 客户7
+             5*60, 25*60;     % 客户8
+             0*60, 20*60;     % 客户9
+             5*60, 25*60;     % 客户10
+            0, 100000000000   % 配送中心（第 depot_idx 行）
         ];
         % 时间窗惩罚项
         lam1=0.5;  % 从1.5降低到0.5，减少提前到达的惩罚
@@ -353,8 +343,8 @@ classdef planner_order_v3_fangzhen < PROBLEM
         end
         
         % ---------- 0. 检查顺序约束：商家必须在对应客户点之前访问 ----------
-        % 商家编号：1-10，对应客户点编号：11-20
-        % 对于每个客户点i+10，如果路径中包含客户点i+10，则必须在其之前包含商家i
+        % 商家编号：1..n，对应客户点编号：n+1..2n
+        % 对于每个客户点 i+n，若路径中含该点，则必须先访问商家 i
         for merchant_id = 1:n
             customer_id = merchant_id + n;  % 客户点编号
             merchant_pos = find(route == merchant_id);
@@ -383,16 +373,16 @@ classdef planner_order_v3_fangzhen < PROBLEM
                         end
                     end
                     
-                    % 如果商家和客户点在同一段，检查顺序
-                    if merchant_seg == customer_seg && merchant_seg > 0
+                    % 同任务(商家+对应客户)须同一架无人机：必须在同一段
+                    if merchant_seg > 0 && customer_seg > 0 && merchant_seg ~= customer_seg
+                        Penalty3 = Penalty3 + 1000;  % 跨段则视为无效分配
+                    elseif merchant_seg == customer_seg && merchant_seg > 0
                         seg_range = (idx0(merchant_seg)+1):(idx0(merchant_seg+1)-1);
                         merchant_pos_in_seg = find(route(seg_range) == merchant_id, 1);
                         customer_pos_in_seg = find(route(seg_range) == customer_id, 1);
                         if merchant_pos_in_seg >= customer_pos_in_seg
-                            Penalty3 = Penalty3 + 1000;  % 商家在客户点之后，违反约束
+                            Penalty3 = Penalty3 + 1000;  % 同段但商家在客户点之后
                         end
-                    elseif merchant_seg > customer_seg && customer_seg > 0
-                        Penalty3 = Penalty3 + 1000;  % 商家段在客户点段之后，违反约束
                     end
                 end
             end
@@ -448,12 +438,12 @@ classdef planner_order_v3_fangzhen < PROBLEM
             for i = 2:length(segforlength)-1
                 point_id = segforlength(i);
                 if point_id >= 1 && point_id <= n
-                    % 商家（编号1-10）：取餐，载重增加
-                    customer_idx = point_id;  % 商家i对应客户点i+10，但demand_q索引是1-10
+                    % 商家（编号1..n）：取餐，载重增加
+                    customer_idx = point_id;
                     load_at_point(i) = load_at_point(i-1) + demand_q(customer_idx);
                 elseif point_id > n && point_id <= 2*n
-                    % 客户点（编号11-20）：配送，载重减少
-                    customer_idx = point_id - n;  % 客户点编号转换为demand_q索引（1-10）
+                    % 客户点（编号n+1..2n）：配送，载重减少
+                    customer_idx = point_id - n;
                     load_at_point(i) = load_at_point(i-1) - demand_q(customer_idx);
                 else
                     load_at_point(i) = load_at_point(i-1);  % 其他情况（不应该发生）
@@ -463,7 +453,8 @@ classdef planner_order_v3_fangzhen < PROBLEM
             
             % load_kg(i) 表示从 segforlength(i) 起飞时的载重（即到达 segforlength(i) 后的载重）
             load_kg = load_at_point(1:end-1);  % 去掉最后一个点（终点depot）
-            load_all(k) = max(load_at_point);  % 保存每架无人机最大载重，以计算约束
+            % 段内**瞬时**载重：取餐加点、投送减点，最大值为该段峰值（非“该段多笔货重之和”）
+            load_all(k) = max(load_at_point);  % 保存每架无人机最大载重，以计算 maxload 约束
         
                T_k_all = 0; 
                E_k     = 0;
@@ -475,12 +466,12 @@ classdef planner_order_v3_fangzhen < PROBLEM
                 % [length]=runPlatemo_forOrder_PRMO(problem,algorithm,N,maxFE,s,M,dots,dot1,dot2,whichObj);
                 % 索引映射：0=配送中心(21), 1-10=商家(1-10), 11-20=客户点(11-20)
                 if segforlength(i) == 0
-                    dot1 = 21;  % 配送中心
+                    dot1 = depot_idx;  % 配送中心
                 else
                     dot1 = segforlength(i);  % 商家或客户点
                 end
                 if segforlength(i+1) == 0
-                    dot2 = 21;  % 配送中心
+                    dot2 = depot_idx;  % 配送中心
                 else
                     dot2 = segforlength(i+1);  % 商家或客户点
                 end 
@@ -599,16 +590,13 @@ classdef planner_order_v3_fangzhen < PROBLEM
                % 到达点索引：0=配送中心(21), 1-10=商家(1-10), 11-20=客户点(11-20)
                dest_idx = segforlength(i+1);
                if dest_idx == 0
-                   % 配送中心对应 TW_sec 的第21行
-                   tw_row = 21;
+                   tw_row = depot_idx;
                elseif dest_idx >= 1 && dest_idx <= n
-                   % 商家（1-10）对应 TW_sec 的第1-10行
                    tw_row = dest_idx;
                elseif dest_idx > n && dest_idx <= 2*n
-                   % 客户点（11-20）对应 TW_sec 的第11-20行
-                   tw_row = dest_idx;  % 客户点11对应第11行，客户点20对应第20行
+                   tw_row = dest_idx;
                else
-                   tw_row = 21;  % 默认使用配送中心时间窗
+                   tw_row = depot_idx;
                end
                aa = TW_sec(tw_row,1);   % 时间窗下界
                bb = TW_sec(tw_row,2);   % 时间窗上界
@@ -692,7 +680,7 @@ classdef planner_order_v3_fangzhen < PROBLEM
         %       使时间目标中的能量惩罚与时间值量级相当（100kJ→667s，典型T约1000-3000s）
         %   两者使用相同的违约量 → 无论个体能量高低，惩罚比例一致，不扭曲Pareto前沿
         E_to_T_scale = 1/150;  % 固定物理换算比（s/J），基于约150W平均水平巡航功率
-        totalViol = Penalty1 + Penalty2;  % 总违约量（J当量，Penalty1已乘loadScale=1e4）
+        totalViol = Penalty1 + Penalty2;  % 载重/电量越限量（与 demand、maxload 同单位量纲，直接加在 Obj1 上）
         
         PopObj(j,1) = real(PopObj(j,1) + totalViol);
         PopObj(j,2) = real(PopObj(j,2) + totalViol * E_to_T_scale + Penalty3);
@@ -1111,28 +1099,29 @@ classdef planner_order_v3_fangzhen < PROBLEM
         %% 诊断方法：返回每架无人机的能耗/用时/惩罚项，用于结果分析
         function Details = CalDetails(obj, PopDec)
         % 返回矩阵 Details（N 行），列为：
-        %   1       : Penalty1（载重超限，J当量）
-        %   2       : Penalty2（电量超限，J）
+        %   1       : Penalty1（载重超 maxload 的 kg 过限量之和，与 CalObj 中 Penalty1 一致）
+        %   2       : Penalty2（单架电量超 maxEC 的 J 过限之和，与 CalObj 一致）
         %   3..2+m  : 每架无人机能耗 E_all(1..m)，单位 J
         %   3+m..2+2m: 每架无人机时间代价 T_all(1..m)，单位 s
         %   2+2m+1  : 是否可行（1=可行，0=违约）
         % ---- 参数（与 CalObj 保持一致）----
         N = size(PopDec, 1);
         n = obj.n;  m = obj.m;
-        UAV_m=2; demand_q=[0.5;0.7;0.65;0.9;0.35;0.2;0.9;0.1;0.45;0.77;0];
+        depot_idx = 2*n + 1;
+        UAV_m=2; demand_q=[1.95;1.7;0.95;0.9;1.85;0];  % 须与 CalObj 中 demand_q 逐字一致
         v_h=10; v_u=5; v_d=3; g=9.8; h_up_down=40;
         rho_air=1.225; A_rotor=0.503;
         Omega=300; R_rotor=0.4; delta_drag=0.012; kappa=1.1; S_FP=0.0151;
         b_blades=4; c_chord=0.0157;
         s_solidity=b_blades*c_chord*R_rotor/(pi*R_rotor^2);
         P_0=(delta_drag/8)*rho_air*s_solidity*A_rotor*Omega^3*R_rotor^3;
-        maxload=3; maxEC=800000; loadScale=1e4;  % 与 CalObj 中 maxEC 保持同步
+        maxload=3; maxEC=800000;  % 与 CalObj 中 maxload/maxEC、Penalty1/2 一致（不加 loadScale）
         lam1=0.5; lam2=1.0;
         % 加载地图数据（与 CalObj 保持一致：显式字符串路径）
         if ispc
-            data_file_path = 'D:\PlatEMO-master-using\PlatEMO\forOrderNew26\Order_Map\order_data.m';
+            data_file_path = 'D:\PlatEMO-master-using\PlatEMO\forOrderNew26\Order_Map\order_data_fangzhen.m';
         else
-            data_file_path = '/home/haichao/Documents/why/why_fromlev/PlatEMO/forOrderNew26/Order_Map/order_data.m';
+            data_file_path = '/home/haichao/Documents/why/why_fromlev/PlatEMO/forOrderNew26/Order_Map/order_data_fangzhen.m';
         end
         if exist(data_file_path,'file')
             codeStr = fileread(data_file_path);
@@ -1155,10 +1144,10 @@ classdef planner_order_v3_fangzhen < PROBLEM
             d_matrix=calculate_distance_matrix_with_obstacles(...
                 dotss,[],[],[],0,0,0);
         end
-        % 与 CalObj 中 TW_sec 保持同步（原始设置）
-        TW_sec=[0,15*60;0,10*60;0,10*60;0,10*60;0,10*60;0,15*60;0,12*60;0,10*60;0,10*60;0,10*60;
-                20*60,40*60;10*60,30*60;5*60,25*60;0*60,20*60;5*60,25*60;20*60,40*60;15*60,35*60;10*60,30*60;0*60,20*60;5*60,25*60;
-                0,1e11];
+        % 与 CalObj 中 TW_sec 保持同步
+        TW_sec=[0,15*60;0,10*60;0,10*60;0,10*60;0,10*60; ...
+            20*60,40*60;10*60,30*60;5*60,25*60;0*60,20*60;5*60,25*60; ...
+            0,1e11];
         nCols = 2 + 2*m + 1;
         Details = zeros(N, nCols);
         for j = 1:N
@@ -1192,8 +1181,8 @@ classdef planner_order_v3_fangzhen < PROBLEM
                 load_all(k)=max(load_at_point);
                 T_k=0; E_k=0; time_cum=0;
                 for i=1:npts-1
-                    dot1=segforlength(i); if dot1==0, dot1=21; end
-                    dot2=segforlength(i+1); if dot2==0, dot2=21; end
+                    dot1=segforlength(i); if dot1==0, dot1=depot_idx; end
+                    dot2=segforlength(i+1); if dot2==0, dot2=depot_idx; end
                     d_hor=d_matrix(dot1,dot2);
                     UAV_mass=UAV_m+load_kg(i); UAV_w=UAV_mass*g;
                     v_0=sqrt((UAV_mass*g)/(2*rho_air*A_rotor));
@@ -1219,10 +1208,10 @@ classdef planner_order_v3_fangzhen < PROBLEM
                     T_k_single=t_up+t_hor+t_down;
                     time_cum=time_cum+T_k_single;
                     dest_idx=segforlength(i+1);
-                    if dest_idx==0, tw_row=21;
+                    if dest_idx==0, tw_row=depot_idx;
                     elseif dest_idx>=1&&dest_idx<=n, tw_row=dest_idx;
                     elseif dest_idx>n&&dest_idx<=2*n, tw_row=dest_idx;
-                    else, tw_row=21;
+                    else, tw_row=depot_idx;
                     end
                     aa=TW_sec(tw_row,1); bb=TW_sec(tw_row,2);
                     if time_cum<aa, Tk=lam1*(aa-time_cum);
@@ -1236,7 +1225,7 @@ classdef planner_order_v3_fangzhen < PROBLEM
             end
             % 约束
             for kk=1:m
-                if load_all(kk)>maxload, P1=P1+(load_all(kk)-maxload)*loadScale; end
+                if load_all(kk)>maxload, P1=P1+(load_all(kk)-maxload); end
                 if E_all(kk)>maxEC, P2=P2+(E_all(kk)-maxEC); end
             end
             feasible = double(P1==0 && P2==0);

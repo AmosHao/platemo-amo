@@ -29,6 +29,18 @@ validPoints = false(n_dots, 1);
 % 设置距离阈值（可以根据需要进行调整）
 distanceThreshold = 1400;  % 例如：5单位
 
+% === 开关：跳过矮建筑（顶高 < lowBuildingTopZ）以加速 ===
+% 说明：仅对 buildings（长方体建筑）生效；禁飞盒 jinfei 仍然检测
+skipLowBuildings = true;   % true：不检测顶高低于阈值的建筑
+lowBuildingTopZ  = 800;     % 算法 z 坐标阈值（40m 对应 800 时可用 800）
+if skipLowBuildings && numBuildings > 0
+    zcols = 3:3:24;
+    ztop  = max(buildings(:, zcols), [], 2);
+    keepB = (ztop >= lowBuildingTopZ);
+    buildings = buildings(keepB, :);
+    numBuildings = size(buildings, 1);
+end
+
 for i = 1:n_dots
     % if i==7
     % aaa=113

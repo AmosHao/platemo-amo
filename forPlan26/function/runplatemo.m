@@ -1,9 +1,9 @@
-[result,Obj]=runplatemo1(@huigui,@SA,100,1,3,100000,20);
-function [result,Obj]=runplatemo1(problem,algorithm,N,M,D,maxFE,s)
+% [result,Obj]=runplatemo1(@huigui,@SA,100,1,3,100000,20);
+% function [result,Obj]=runplatemo1(problem,algorithm,N,M,D,maxFE,s)
 
 
 % [result,igd,hv]=runplatemo(@GLT1,@test1GOCEA_kmax5_hvtest,100,10000,100);
-% function [Obj,igd,hv,igd_end,hv_end]=runplatemo(problem,algorithm,N,M,D,maxFE,s)
+function [Obj,igd,hv,igd_end,hv_end]=runplatemo(problem,algorithm,N,M,D,maxFE,s)
 platemo('problem',problem,'algorithm',algorithm,'N',N,'M',M,'D',D,'maxFE',maxFE,'save',s);
 result = evalin('base', 'result');
 % 获取最后一行最后一列的 SOLUTION 结构

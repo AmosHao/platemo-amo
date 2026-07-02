@@ -200,9 +200,9 @@ end
 %         % fmax   = max(max(PopObj,[],1),zeros(1,M));
 %         % fmax=[5*10^9,5*10^7];
 %         % fmax=[5000000,5000000,5000000];
-%         % fmax=[50,50,50];
+%         fmax=[50,50,50];
 %         % fmax=[500,500,500];
-%         fmax=[500000,500000,500000];
+%         % fmax=[500000,500000,500000];
 %         PopObj = (PopObj-repmat(fmin,N,1))./repmat((fmax-fmin)*1.1,N,1);
 %         PopObj(any(PopObj>1,2),:) = [];
 %         RefPoint = ones(1,M);

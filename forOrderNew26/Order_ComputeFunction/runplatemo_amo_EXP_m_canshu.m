@@ -46,8 +46,8 @@ outRootDir    = '/home/haichao/Documents/why/why_fromlev/PlatEMO/forOrderNew26/O
 
 % --- OperatorAMO（pc / er）参数实验：网格 (pcList × erList) ---
 doPcErSweep   = true;           % true：对每个 (pc,er) 组合各存一份 *_runs.mat
-pcList        = [0.25, 0.5, 0.75];
-erList        = [0.25, 0.5, 0.75];
+pcList        = [0, 0.25, 0.5, 0.75, 1];
+erList        = [0, 0.25, 0.5, 0.75, 1];
 defaultPc     = 0.5;             % doPcErSweep=false 时注入 NSGAIII_G
 defaultEr     = 0.25;
 

@@ -125,7 +125,7 @@ else
             auxSize=auxSize-1;
         end
     else
-tic;
+        % NOTE: parallel worker（parfor/spmd）里 tic/toc 可能触发 Transparency violation
         while auxSize-selectedSize>0
             totalHV=hvtest(FiObjvs',refPoint);
             %totalHV = CalHV(FiObjvs,max(FiObjvs,[],1)*1.1,1,10000);
@@ -147,7 +147,6 @@ tic;
             auxSize=auxSize-1;
         end
     end
-    toc;
     pop=FiPop; objvs=FiObjvs; clustTag=FiTag;  % The selected population
 end
 
@@ -230,7 +229,7 @@ else
             auxSize=auxSize-1;
         end
     else
-tic;
+        % NOTE: parallel worker（parfor/spmd）里 tic/toc 可能触发 Transparency violation
         while auxSize-selectedSize>0
             totalHV=hvtest(FiObjvs',refPoint);
             %totalHV = CalHV(FiObjvs,max(FiObjvs,[],1)*1.1,1,10000);
@@ -258,7 +257,6 @@ tic;
             auxSize=auxSize-1;
         end
     end
-    toc;
     pop=FiPop; objvs=FiObjvs; clustTag=FiTag;  % The selected population
 end
 

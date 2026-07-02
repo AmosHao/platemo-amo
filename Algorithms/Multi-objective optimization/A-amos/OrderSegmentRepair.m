@@ -18,6 +18,9 @@ function sol = OrderSegmentRepair(sol, n, m, varDim)
     sol = EnsureNoZeroAtEnds(sol);
     sol = RepairSegments(sol, n, m);
     sol = RepairSegmentSizes(sol, m);
+    % RepairSegmentSizes 为凑“每段至少 2 点”可能与 0 交换，会把已合并的商-客对拆回两段，再并一次
+    sol = RepairSegments(sol, n, m);
+    sol = RepairSegmentSizes(sol, m);
     if length(sol) ~= varDim
         if length(sol) < varDim
             sol = [sol, zeros(1, varDim - length(sol))];
